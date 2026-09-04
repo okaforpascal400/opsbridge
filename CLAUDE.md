@@ -1,48 +1,97 @@
-# CLAUDE.md — PZ Command Wall
-Permanent rules for every session in this repo. These are laws, not suggestions. When output conflicts with this file, this file wins. Read ROADMAP.md for what we are building and current status.
+# CLAUDE.md: Working Agreement for This Repo
 
-## Design constitution — "Quiet Institutional Luxury"
-The bar: built by a top-tier firm for a board — never a dashboard template. Reference DNA: Bloomberg Terminal seriousness × Linear restraint × fine annual-report typography. If a screen could appear in a template marketplace, it has failed.
+This file governs how coding agents (Claude Code) and I work in this repository.
+It exists so that every change is deliberate, tested, and something I can defend
+line by line in an interview. If a change would violate anything here, stop and ask.
 
-### Typography (the biggest differentiator)
-- Display face: **Fraunces** (variable, optical sizing on), weight 560–620, tight tracking — ONLY page titles, category names, hero numbers.
-- UI/body face: **Inter Tight**. Never Fraunces for UI chrome.
-- **JetBrains Mono** 12px — timestamps and code only. No fourth face exists.
-- ALL numerals: `tabular-nums`. Hero KPIs: Fraunces 40–56px, unit/currency as smaller muted Inter Tight suffix (₦85.1 with half-size "bn").
-- Exactly 6 sizes: 12/14/16/20/28/44px. Nothing off-scale. Eyebrows: 12px uppercase, +0.14em tracking, muted.
+## What this project is
 
-### Color (discipline is the aesthetic)
-- Paper `#FBFAF8` (warm off-white; never pure white or grey page bg). Cards `#FFFFFF`. Ink `#16181D`. Muted `#5A6070`. Hairline `#E8E6E1`.
-- ONE accent: PZ red `#E31837` — ONLY on: active scope pill, primary buttons, critical alarm tier, logo. Anywhere else = remove it.
-- Deep navy `#12233D`: Control Tower big-screen background and nav text only. Not a card color.
-- Semantic (data only): green `#067647`, amber `#B54708`, danger `#B42318` — tinted chips (tint bg + dark text). Never borders, never large fills.
-- FORBIDDEN: surface gradients, glassmorphism, colored card backgrounds, second accents, dark-mode-by-default, any hex not listed here.
+OpsBridge is an AI agent that ingests a fragmented, messy B2B operations stack
+(database plus spreadsheet export plus PDFs plus an undocumented partner API),
+answers natural-language operations questions over it, and *proposes* write-actions
+that a human confirms. It is built to demonstrate the three core Forward Deployed
+Engineer "hats": Software Engineer, AI Engineer, and AI Solutions Architect.
 
-### Layout & surfaces
-- Whitespace is the luxury: 64px section spacing, 24px card padding, 8px grid, 1280px max content width.
-- Cards: white, 1px hairline, radius 10px, shadow `0 1px 2px rgba(22,24,29,.04)` max. Hover = hairline darkens only. No lift/scale/glow.
-- Prefer hairline-ruled report sections over card-soup; cards only where grouping demands.
-- Tables: no zebra. 1px hairline row rules, 44px rows, numerics right-aligned tabular, headers 12px uppercase muted.
+The differentiator is hat 3: evals, observability, guardrails, deployment, and
+documented decisions, not just a working agent.
 
-### Motion (barely there)
-150–250ms ease-out only. Count-up numbers on load/scope-switch. Feed items slide in 200ms. Nothing bounces, floats, or moves uninvited; single permitted pulse: critical-alarm dot, soft, 2s. Respect `prefers-reduced-motion`.
+## Voice and output rules (applies to everything the agent writes)
 
-### Signature elements (carry the "not common" impression — build distinctively)
-1. **Scope switcher** (app bar, top-center): `All | Family Care | Electricals`. Active = red fill white text. Switching cross-fades every number on screen (200ms) with count-up. This interaction IS the multinational story.
-2. **Intelligence Feed** (collapsible right column, every category page + Tower): priority-ordered alarms CRITICAL (red chip) / HIGH (amber) / WATCH (neutral); each item = one-line plain-English finding, JetBrains Mono timestamp, owner dot, → link to source view. Wire-service feel: hairline-separated, no cards.
-3. **Control Tower big-screen** (`/tower/display`, lobby TV): navy bg, white Fraunces numerals readable at distance, alarm ticker at bottom, KPIs auto-cycle 12s, zero interactive chrome. The most beautiful screen in the building.
-4. **People Hub assistant**: answers typeset editorially — Fraunces first-line summary, Inter Tight body — every answer footed with a source chip ("Dress Code Policy §4"). Suggested questions as quiet text links, never button-soup.
+1. No em-dashes anywhere. Not in docs, code comments, commit messages, README, or
+   generated text. Use a plain hyphen, a comma, a colon, or split the sentence.
+2. No AI attribution of any kind. No "Generated with Claude Code", no co-author
+   trailer in commits, no badges, no logos. This repo is my work and reads that way.
+3. Write like a human engineer: plain, direct, specific. No marketing filler, no
+   inflated adjectives, no "delve", "seamless", "leverage" as verbs.
 
-## Engineering rules
-- **Design tokens in ONE place** (`tokens.css` / `theme.ts`): every color, size, duration above. No raw hex/px outside tokens.
-- **SBU security is server-side law**: every table carries `sbu`; every session carries `sbu_scope` (FAMILY_CARE | ELECTRICALS | ALL); middleware injects scope into EVERY query — human or AI-generated. Never trust the caller. UI scope switcher only re-requests within permitted scope.
-- **AI layer**: Azure OpenAI, schema-only prompts — the model NEVER sees data rows. SELECT-only guardrails, server-side scope injection, full query audit log. Eval suite gates go-live; run it before declaring any AI change done.
-- Accessibility: WCAG AA, 16px body floor, keyboard-reachable everything. Audience includes 60+ executives.
-- Every page passes: 1366×768 above-the-fold, 1920×1080, 375px, and `/tower/display` at 3840×2160. Fold budgets are asserted in verify scripts — recover height from spacing, never move a limit.
+## Golden rules
 
-## Working discipline
-- After verification runs, ALWAYS kill any dev server you started. Never leave a shell holding port 3000.
-- If port 3000 is taken, kill the PID the error names.
-- Build clean + lint clean + verify scripts green before declaring any step done; end steps with screenshots of key states.
-- Do not touch `.env.local`. Secrets never appear in code, commits, or output.
-- One instance, one platform: no standalone sub-apps. Every module lands behind the same SSO, scope model, audit log, and acceptance discipline.
+1. I am accountable for every PR. No unexplained code. If you generate it, you
+   explain it in the PR description in plain language. No slop.
+2. Tests are not optional. Every module with logic ships with tests. A phase is not
+   "done" until its tests pass in CI.
+3. Small, reviewable steps. One concern per change. Prefer a series of clear commits
+   over one large dump I cannot review.
+4. Never touch these without asking: schema_adapter/ core reconciliation logic
+   (I write and own this by hand), guardrails/ policy rules, and anything under
+   evals/ golden data. You may scaffold interfaces; I fill the judgment.
+5. Log the decision. Any real tradeoff gets a one-line entry in DECISIONS.md.
+6. Secrets never in code. Use .env; keep .env.example current. Never print or commit
+   real keys.
+
+## Stack (do not swap without a DECISIONS.md entry)
+
+- Python 3.11, FastAPI, pydantic v2
+- SQLAlchemy plus Postgres 16 (Docker locally)
+- Anthropic API for the LLM (model pinned in config, not hardcoded per call)
+- pytest for tests; ruff for lint
+- GitHub Actions for CI (lint plus tests on every PR)
+- Railway for deployment
+- MCP server exposing the ops tools
+
+## Project structure (canonical, keep it this way)
+
+```
+opsbridge/
+  README.md            demo video, architecture, evals table, how-to-debug
+  SOLUTION.md          discovery-style writeup (business problem, metrics, risks)
+  DECISIONS.md         architecture decision log, one entry per real tradeoff
+  ROADMAP.md           phased delivery plan tied to the five hats
+  CLAUDE.md            this file
+  legacy/              the seeded mess: DB seed, partner API, PDFs, spreadsheet
+  schema_adapter/      canonical model plus reconciliation (hand-written, owned by me)
+  agent/               tool-calling loop, tools, prompts, memory/state
+  mcp_server/          MCP exposure of ops tools
+  guardrails/          write-action policy plus human-in-the-loop proposal layer
+  observability/       trace store plus /trace endpoint/view
+  evals/               golden dataset plus scoring harness plus report
+  api/                 FastAPI app wiring it together
+  tests/
+  .github/workflows/   CI
+  .env.example
+  docker-compose.yml   Postgres locally
+```
+
+## Coding standards
+
+- Type everything. pydantic models for all data crossing a boundary.
+- Functions do one thing; if a function needs a paragraph to explain, split it.
+- No bare except. Catch specific exceptions; log with the trace_id.
+- Config lives in one place (config.py / env), never scattered magic values.
+- Every tool the agent can call is a typed, individually testable function.
+
+## The agent's boundaries (safety model)
+
+- The agent may read freely across all sources.
+- The agent may propose exactly three write-actions: confirm order, hold account,
+  issue refund note.
+- The agent never executes a write on its own. It emits a structured proposal with a
+  rationale; a human confirms in the UI; only then does the action commit.
+- Every proposal and every confirmation is recorded in the trace.
+
+## Definition of done (per phase)
+
+- Code plus tests written, tests green in CI.
+- Any tradeoff logged in DECISIONS.md.
+- ROADMAP.md phase checkbox ticked.
+- It runs locally via documented commands, and (from Phase 1) deploys to Railway.
