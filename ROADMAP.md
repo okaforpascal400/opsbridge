@@ -15,17 +15,17 @@ Legend: [ ] not started, [~] in progress, [x] done
 Prove the software-engineering fundamentals and stand up the messy legacy world the
 agent will later have to tame. Deploy something live on day one.
 
-- [ ] Repo skeleton matching CLAUDE.md structure
-- [ ] Postgres via docker-compose
-- [ ] Seed a deliberately messy legacy.orders table (inconsistent columns, mixed date
+- [x] Repo skeleton matching CLAUDE.md structure
+- [x] Postgres via docker-compose
+- [x] Seed a deliberately messy legacy.orders table (inconsistent columns, mixed date
   formats, free-text statuses, mixed phone/amount formats)
-- [ ] Seed a returns spreadsheet with no shared key (fuzzy join only)
+- [x] Seed a returns spreadsheet with no shared key (fuzzy join only)
 - [ ] Seed mismatched invoice PDFs into data/docs/
-- [ ] legacy/partner_api.py, undocumented partner delivery API (returns XML)
-- [ ] FastAPI app with /health
-- [ ] CI: ruff plus pytest on every PR
+- [x] legacy/partner_api.py, undocumented partner delivery API (returns XML)
+- [x] FastAPI app with /health
+- [~] CI: ruff plus pytest on every PR (workflow written, not yet run on GitHub)
 - [ ] Deploy /health to Railway (deploy early, not last)
-- [ ] Seed tests asserting the mess actually exists
+- [x] Seed tests asserting the mess actually exists
 
 ## Phase 2: Schema adapter (the seam). Hats: 1, 3 (data curation)
 The interview centerpiece. Hand-written by me. Reconciles every messy source into one
