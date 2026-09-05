@@ -1,0 +1,50 @@
+# Tool configuration only. OpsBridge is an application, not a distributable
+# package, so there is deliberately no [project] table and no build backend:
+# nothing here should ever be pip-installed as a library.
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+# Explicit rule set. Docstring rules (D) are not selected: the house style asks
+# for sparse, high-value comments rather than a docstring on every symbol.
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # import sorting
+    "UP",   # pyupgrade, keeps us on modern 3.14 syntax
+    "B",    # bugbear
+    "C4",   # comprehension rewrites
+    "SIM",  # simplifications
+    "ARG",  # unused arguments
+    "RET",  # return-statement hygiene
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Pytest fixtures are requested by name and are often used only for their
+# side effect (seeding a database, setting an env var), which reads to ARG001
+# as an unused argument. Scoped here rather than as noqa comments in tests.
+"tests/*" = ["ARG001"]
+
+[tool.ruff.lint.isort]
+# Declared explicitly so import order is identical on a developer machine and
+# in CI, rather than depending on ruff's first-party source detection.
+known-first-party = [
+    "agent",
+    "api",
+    "config",
+    "evals",
+    "guardrails",
+    "legacy",
+    "mcp_server",
+    "observability",
+    "schema_adapter",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Repo root on sys.path so "import config" and "import legacy.seed_data" work
+# without an installed package or a tests/__init__.py.
+pythonpath = ["."]
+addopts = "-q"

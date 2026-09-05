@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: opsbridge
+          POSTGRES_PASSWORD: opsbridge
+          POSTGRES_DB: opsbridge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U opsbridge -d opsbridge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        env:
+          DATABASE_URL: postgresql+psycopg2://opsbridge:opsbridge@localhost:5432/opsbridge
+          # The service container above is torn down with the job, so it is safe
+          # to point the database-backed tests at it even though the seed drops
+          # and recreates the legacy schema.
+          OPSBRIDGE_TEST_DATABASE_URL: postgresql+psycopg2://opsbridge:opsbridge@localhost:5432/opsbridge
+        run: pytest
