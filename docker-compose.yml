@@ -1,0 +1,27 @@
+# Local Postgres for development. Bring it up with: docker compose up -d
+# The seed script (python -m legacy.seed_db) drops and recreates the "legacy"
+# schema in whatever database DATABASE_URL points at, so keep this instance
+# separate from the throwaway database used by the gated tests.
+services:
+  postgres:
+    image: postgres:16
+    container_name: opsbridge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: opsbridge
+      POSTGRES_PASSWORD: opsbridge
+      POSTGRES_DB: opsbridge
+    ports:
+      - "5432:5432"
+    volumes:
+      - opsbridge_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opsbridge -d opsbridge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# Named volume rather than a bind mount so the data survives a container
+# rebuild and does not depend on host path permissions.
+volumes:
+  opsbridge_pgdata:
