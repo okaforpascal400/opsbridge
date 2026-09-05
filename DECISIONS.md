@@ -96,3 +96,12 @@ Why: The seed drops and recreates the entire legacy schema, so it cannot share a
 database with development data, and DDL at that scope does not roll back cleanly inside
 a fixture transaction. Gating on a separate variable makes destroying the wrong
 database an explicit act rather than an accident.
+
+### 011: Standardize on Python 3.14 (2026-09-05)
+Decision: Use Python 3.14 as the project's single version, for both local dev and CI.
+Alternatives: Install and pin Python 3.11 (the version originally scaffolded).
+Why: The only interpreter available on the build machine is 3.14, and all pinned
+dependencies install and pass on it (38 tests green). Chasing a 3.11 install added
+friction with no benefit. The guiding principle is that local and CI must run the
+same interpreter, so both are now 3.14. Revisit only if a dependency drops 3.14
+support.

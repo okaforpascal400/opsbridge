@@ -62,7 +62,7 @@ schema adapter has to close in Phase 2, and the seed tests fail if the mess goes
 
 ## Running it locally
 
-Requires Python 3.11 and Docker.
+Requires Python 3.14 and Docker.
 
 1. Create the virtualenv and install dependencies.
 
