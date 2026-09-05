@@ -41,7 +41,7 @@ documented decisions, not just a working agent.
 
 ## Stack (do not swap without a DECISIONS.md entry)
 
-- Python 3.11, FastAPI, pydantic v2
+- Python 3.14, FastAPI, pydantic v2
 - SQLAlchemy plus Postgres 16 (Docker locally)
 - Anthropic API for the LLM (model pinned in config, not hardcoded per call)
 - pytest for tests; ruff for lint

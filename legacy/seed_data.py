@@ -38,11 +38,9 @@ from __future__ import annotations
 import random
 from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Final, TypeVar
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict
-
-T = TypeVar("T")
 
 RANDOM_SEED: Final[int] = 20260901
 ORDER_COUNT: Final[int] = 200
@@ -179,7 +177,7 @@ def _allocate_counts(weights: Sequence[int], total: int) -> list[int]:
     return counts
 
 
-def _variant_plan(
+def _variant_plan[T](
     variants: Sequence[T],
     weights: Sequence[int],
     total: int,
