@@ -105,3 +105,25 @@ dependencies install and pass on it (38 tests green). Chasing a 3.11 install add
 friction with no benefit. The guiding principle is that local and CI must run the
 same interpreter, so both are now 3.14. Revisit only if a dependency drops 3.14
 support.
+
+### 012: Missing customer name routes the row to quarantine, does not crash the batch (2026-09-05)
+Decision: If a legacy order row has no usable name in either cust_name or customer, it
+is rejected as a structured RejectedRow (source row plus reason) and excluded from the
+canonical output, rather than failing the whole reconciliation. CanonicalOrder.customer_name
+stays strict (min_length=1).
+Alternatives: Relax the canonical model to allow empty names; or hard-fail the batch on
+the first unnameable row.
+Why: The canonical model is a clean contract; anything that reaches it must satisfy it.
+Resilience to dirty data belongs in the pipeline around the model, not in a weaker
+contract. Routing bad rows keeps the good data flowing and makes "how many rows could
+not be canonicalized, and why" a measurable number.
+
+### 013: Missing return reason is accepted, not rejected (2026-09-05)
+Decision: A return with a blank reason is still valid. Store reason as "" canonically;
+the presentation layer may display "unspecified". Do not invent a reason that was not
+in the source.
+Alternatives: Reject returns with no reason; or write "unspecified" into the canonical
+data itself.
+Why: Reason is not critical to a return's identity or to matching, so it should not
+block canonicalization. Storing "" rather than a fabricated value keeps the canonical
+data faithful to the source; display-time substitution avoids inventing information.
