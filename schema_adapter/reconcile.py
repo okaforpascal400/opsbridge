@@ -114,9 +114,7 @@ def normalize_phone(raw: str | None) -> str | None:
     so stripping to digits and taking the last ten collapses every format
     to the same value.
 
-    This lets the fuzzy matcher treat two records for the same real number
-    as a match. A value that cannot yield ten digits returns None rather
-    than raising.
+    A value that cannot yield ten digits returns None rather than raising.
     """
     text = _clean_optional_text(raw)
 
@@ -137,14 +135,14 @@ def parse_amount(raw: str | int) -> Decimal | None:
     """
     Parse a legacy amount into a money-safe Decimal.
 
-    The amount column holds either "N162,500" (N prefix, comma separators)
-    or a bare integer like 54550. Amounts are whole naira with no kobo,
-    so stripping to digits is safe for this data.
+    The amount column holds either "N162,500" or a bare integer like 54550.
+    Amounts are whole naira with no kobo, so stripping to digits is safe
+    for this data.
 
-    Returns a Decimal, never a float, or None when there are no digits
-    to parse.
+    Returns a Decimal, never a float, or None when there are no digits.
     """
     text = str(raw).strip()
+
     digits = "".join(
         character for character in text if character.isdigit()
     )
@@ -156,7 +154,52 @@ def parse_amount(raw: str | int) -> Decimal | None:
 
 
 def build_order(row: dict) -> CanonicalOrder | RejectedRow:
-    raise NotImplementedError
+    """
+    Build a CanonicalOrder from one raw legacy order row, or quarantine it.
+
+    Required fields (name, phone, amount, date) must canonicalize or the
+    whole row is rejected with a reason naming the failed field(s).
+
+    Status is soft: it always resolves to an OrderStatus, so it never
+    causes rejection.
+    """
+    name = normalize_name(
+        row.get("cust_name"),
+        row.get("customer"),
+    )
+    order_date = parse_order_date(row.get("order_date"))
+    phone = normalize_phone(row.get("phone"))
+    amount = parse_amount(row.get("amount"))
+    status = normalize_status(row.get("status"))
+
+    failures: list[str] = []
+
+    if name is None:
+        failures.append("no usable name")
+
+    if order_date is None:
+        failures.append("unparseable date")
+
+    if phone is None:
+        failures.append("no usable phone")
+
+    if amount is None:
+        failures.append("unparseable amount")
+
+    if failures:
+        return RejectedRow(
+            source=row,
+            reason="; ".join(failures),
+        )
+
+    return CanonicalOrder(
+        order_id=row["order_id"],
+        customer_name=name,
+        order_date=order_date,
+        status=status,
+        phone=phone,
+        amount=amount,
+    )
 
 
 def build_return(
