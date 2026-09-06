@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from schema_adapter.models import (
@@ -38,7 +38,34 @@ def normalize_name(
 
 
 def parse_order_date(raw: str) -> date | None:
-    raise NotImplementedError
+    """
+    Parse a legacy order date using the three known source formats.
+
+    Supported formats:
+    - ISO:       2026-06-15
+    - Slashed:   07/03/2026  -> day/month/year
+    - Long form: March 1, 2026
+
+    Returns None when the value is blank or does not match any known format.
+    """
+    text = _clean_optional_text(raw)
+
+    if text is None:
+        return None
+
+    formats = (
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%B %d, %Y",
+    )
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+
+    return None
 
 
 def normalize_status(raw: str | None) -> OrderStatus:

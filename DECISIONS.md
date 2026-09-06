@@ -137,3 +137,14 @@ normalize source data, not invent new data, so merging two differing names (whic
 fabricate a value present in neither column) is out of scope. A single deterministic
 precedence rule is predictable and testable, and the choice is locked by
 test_both_populated_cust_name_wins.
+
+### 015: Slashed dates parse day-first (DD/MM/YYYY) (2026-09-06)
+Decision: parse_order_date interprets the slashed format (e.g. "07/03/2026") as
+DD/MM/YYYY, so 07/03/2026 is the 7th of March.
+Alternatives: Parse as MM/DD/YYYY (US convention); reject slashed dates as too ambiguous.
+Why: The format is genuinely ambiguous in isolation. Rather than guess, the ordering was
+resolved from the data's own generator: legacy/seed_data.py line 207 emits
+f"{value.day:02d}/{value.month:02d}/{value.year}", which is day-first. Parsing month-first
+would silently corrupt every ambiguous date (any day <= 12) while appearing to succeed,
+the most dangerous kind of bug. The rule is locked by test_parses_slashed_as_day_first
+and test_slashed_unambiguous_day_still_day_first.
