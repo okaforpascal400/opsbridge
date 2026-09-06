@@ -127,3 +127,13 @@ data itself.
 Why: Reason is not critical to a return's identity or to matching, so it should not
 block canonicalization. Storing "" rather than a fabricated value keeps the canonical
 data faithful to the source; display-time substitution avoids inventing information.
+
+### 014: cust_name wins when both legacy name columns are populated (2026-09-05)
+Decision: normalize_name uses cust_name when both cust_name and customer hold usable
+values. Conflicting values are not combined or merged.
+Alternatives: Prefer customer; concatenate both; flag the row for review.
+Why: cust_name is the primary column in the legacy schema. The adapter's job is to
+normalize source data, not invent new data, so merging two differing names (which would
+fabricate a value present in neither column) is out of scope. A single deterministic
+precedence rule is predictable and testable, and the choice is locked by
+test_both_populated_cust_name_wins.
