@@ -60,13 +60,6 @@ def normalize_name(
 def parse_order_date(raw: str) -> date | None:
     """
     Parse a legacy order date using the three known source formats.
-
-    Supported formats:
-    - ISO:       2026-06-15
-    - Slashed:   07/03/2026 -> day/month/year
-    - Long form: March 1, 2026
-
-    Returns None when the value is blank or does not match any known format.
     """
     text = _clean_optional_text(raw)
 
@@ -91,10 +84,6 @@ def parse_order_date(raw: str) -> date | None:
 def normalize_status(raw: str | None) -> OrderStatus:
     """
     Map a legacy free-text status onto the OrderStatus enum.
-
-    Matching is case-insensitive and whitespace-tolerant. Both blank and
-    unrecognized values return UNKNOWN: an unknown status does not make an
-    order unusable, so we record it honestly rather than guess or reject.
     """
     cleaned = _clean_optional_text(raw)
 
@@ -106,15 +95,7 @@ def normalize_status(raw: str | None) -> OrderStatus:
 
 def normalize_phone(raw: str | None) -> str | None:
     """
-    Normalize a legacy phone into one canonical form: "+234" plus the last ten
-    significant digits.
-
-    The three legacy formats all wrap the same ten digits
-    (international "+234"+digits, national "0"+digits, bare digits),
-    so stripping to digits and taking the last ten collapses every format
-    to the same value.
-
-    A value that cannot yield ten digits returns None rather than raising.
+    Normalize a legacy phone into one canonical form.
     """
     text = _clean_optional_text(raw)
 
@@ -134,12 +115,6 @@ def normalize_phone(raw: str | None) -> str | None:
 def parse_amount(raw: str | int) -> Decimal | None:
     """
     Parse a legacy amount into a money-safe Decimal.
-
-    The amount column holds either "N162,500" or a bare integer like 54550.
-    Amounts are whole naira with no kobo, so stripping to digits is safe
-    for this data.
-
-    Returns a Decimal, never a float, or None when there are no digits.
     """
     text = str(raw).strip()
 
@@ -156,12 +131,6 @@ def parse_amount(raw: str | int) -> Decimal | None:
 def build_order(row: dict) -> CanonicalOrder | RejectedRow:
     """
     Build a CanonicalOrder from one raw legacy order row, or quarantine it.
-
-    Required fields (name, phone, amount, date) must canonicalize or the
-    whole row is rejected with a reason naming the failed field(s).
-
-    Status is soft: it always resolves to an OrderStatus, so it never
-    causes rejection.
     """
     name = normalize_name(
         row.get("cust_name"),
@@ -208,13 +177,6 @@ def build_return(
 ) -> CanonicalReturn | RejectedRow:
     """
     Build a CanonicalReturn from one raw returns CSV row, or quarantine it.
-
-    Returns have no order_id, so return_row_index identifies the row.
-    Required fields are name, phone, and amount; any failure quarantines
-    the row with a reason naming the failed field(s).
-
-    reason is soft (DECISION 013): a blank reason is stored as "" and
-    never causes rejection.
     """
     name = normalize_name(row.get("customer_name"), None)
     phone = normalize_phone(row.get("phone"))
@@ -251,4 +213,31 @@ def reconcile(
     order_rows: list[dict],
     return_rows: list[dict],
 ) -> ReconciliationResult:
-    raise NotImplementedError
+    """
+    Run every raw row through its builder and collect the outcomes into one result.
+    """
+    orders: list[CanonicalOrder] = []
+    returns: list[CanonicalReturn] = []
+    rejected: list[RejectedRow] = []
+
+    for row in order_rows:
+        built = build_order(row)
+
+        if isinstance(built, RejectedRow):
+            rejected.append(built)
+        else:
+            orders.append(built)
+
+    for index, row in enumerate(return_rows):
+        built = build_return(row, index)
+
+        if isinstance(built, RejectedRow):
+            rejected.append(built)
+        else:
+            returns.append(built)
+
+    return ReconciliationResult(
+        orders=orders,
+        returns=returns,
+        rejected=rejected,
+    )
