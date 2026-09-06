@@ -1,3 +1,14 @@
+"""
+Reconciles the messy legacy sources into the clean canonical contract.
+
+Each normalizer is a small, pure, individually testable function.
+Row builders run the normalizers and either produce a canonical object
+or quarantine the row.
+
+The fuzzy matcher for returns to orders is deliberately left for a later
+step, after the normalizers are solid and tested.
+"""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -11,8 +22,6 @@ from schema_adapter.models import (
     RejectedRow,
 )
 
-
-# Fixed reference data for translating legacy status values.
 _STATUS_MAP: dict[str, OrderStatus] = {
     "confirmed": OrderStatus.CONFIRMED,
     "conf": OrderStatus.CONFIRMED,
@@ -54,7 +63,7 @@ def parse_order_date(raw: str) -> date | None:
 
     Supported formats:
     - ISO:       2026-06-15
-    - Slashed:   07/03/2026  -> day/month/year
+    - Slashed:   07/03/2026 -> day/month/year
     - Long form: March 1, 2026
 
     Returns None when the value is blank or does not match any known format.
@@ -96,7 +105,32 @@ def normalize_status(raw: str | None) -> OrderStatus:
 
 
 def normalize_phone(raw: str | None) -> str | None:
-    raise NotImplementedError
+    """
+    Normalize a legacy phone into one canonical form: "+234" plus the last ten
+    significant digits.
+
+    The three legacy formats all wrap the same ten digits
+    (international "+234"+digits, national "0"+digits, bare digits),
+    so stripping to digits and taking the last ten collapses every format
+    to the same value.
+
+    This lets the fuzzy matcher treat two records for the same real number
+    as a match. A value that cannot yield ten digits returns None rather
+    than raising.
+    """
+    text = _clean_optional_text(raw)
+
+    if text is None:
+        return None
+
+    digits = "".join(
+        character for character in text if character.isdigit()
+    )
+
+    if len(digits) < 10:
+        return None
+
+    return f"+234{digits[-10:]}"
 
 
 def parse_amount(raw: str | int) -> Decimal | None:
