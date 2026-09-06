@@ -148,3 +148,17 @@ f"{value.day:02d}/{value.month:02d}/{value.year}", which is day-first. Parsing m
 would silently corrupt every ambiguous date (any day <= 12) while appearing to succeed,
 the most dangerous kind of bug. The rule is locked by test_parses_slashed_as_day_first
 and test_slashed_unambiguous_day_still_day_first.
+
+### 016: Unknown and blank statuses both map to UNKNOWN, not quarantine (2026-09-06)
+Decision: normalize_status maps both an empty/blank status and any unrecognized status
+value onto OrderStatus.UNKNOWN. Matching is case-insensitive and whitespace-tolerant
+against a fixed table of known variants (confirmed, CONF, pending call, PENDING,
+delivered, returned?).
+Alternatives: Quarantine the row on an unknown status; guess the closest known status.
+Why: Unlike a missing name, an unknown status does not make an order unusable, the
+customer, amount, and date are still valid, so quarantining the whole row would discard
+good data over one soft field. Recording UNKNOWN is the faithful answer: it neither
+guesses nor throws away the order. Both the expected blank ("") and an unexpected value
+(e.g. "cancelled") resolve to UNKNOWN; distinguishing them can be surfaced later as an
+observability metric. Locked by test_empty_string_is_unknown and
+test_unrecognized_value_is_unknown.

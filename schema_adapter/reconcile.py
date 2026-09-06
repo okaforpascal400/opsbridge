@@ -12,6 +12,17 @@ from schema_adapter.models import (
 )
 
 
+# Fixed reference data for translating legacy status values.
+_STATUS_MAP: dict[str, OrderStatus] = {
+    "confirmed": OrderStatus.CONFIRMED,
+    "conf": OrderStatus.CONFIRMED,
+    "pending call": OrderStatus.PENDING,
+    "pending": OrderStatus.PENDING,
+    "delivered": OrderStatus.DELIVERED,
+    "returned?": OrderStatus.RETURNED,
+}
+
+
 def _clean_optional_text(value: str | None) -> str | None:
     """
     Return stripped text when usable, otherwise None.
@@ -69,7 +80,19 @@ def parse_order_date(raw: str) -> date | None:
 
 
 def normalize_status(raw: str | None) -> OrderStatus:
-    raise NotImplementedError
+    """
+    Map a legacy free-text status onto the OrderStatus enum.
+
+    Matching is case-insensitive and whitespace-tolerant. Both blank and
+    unrecognized values return UNKNOWN: an unknown status does not make an
+    order unusable, so we record it honestly rather than guess or reject.
+    """
+    cleaned = _clean_optional_text(raw)
+
+    if cleaned is None:
+        return OrderStatus.UNKNOWN
+
+    return _STATUS_MAP.get(cleaned.lower(), OrderStatus.UNKNOWN)
 
 
 def normalize_phone(raw: str | None) -> str | None:
