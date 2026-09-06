@@ -176,3 +176,16 @@ folding is the invariant that makes them equal, verified against the generator's
 _local_number_of (legacy/seed_data.py:240-245). Returning None on too-few-digits keeps
 the normalizer from crashing the batch; the row builder decides whether a phone-less row
 is quarantined. Locked by test_all_three_formats_collapse_to_same_string.
+
+### 018: Amounts parse to Decimal via digit-stripping, safe because values are whole naira (2026-09-06)
+Decision: parse_amount coerces input to string, strips to digits, and returns
+Decimal(digits), or None when there are no digits. It never uses float.
+Alternatives: Parse with float; strip only the known "N" prefix and commas rather than
+all non-digits; reject non-numeric input by raising.
+Why: Currency must be represented exactly, so Decimal is used rather than float, which
+cannot represent many decimal values precisely. Digit-stripping is safe for this data
+specifically because the generator emits whole-naira amounts with no kobo
+(legacy/seed_data.py AMOUNT_MINIMUM..AMOUNT_MAXIMUM in steps of 50); if fractional
+amounts were possible, digit-stripping would corrupt them and a decimal-aware parse would
+be required. Returning None on no-digits keeps the normalizer from crashing the batch.
+Locked by test_result_is_decimal_not_float and test_parses_naira_text_with_prefix_and_commas.

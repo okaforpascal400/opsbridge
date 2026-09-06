@@ -134,7 +134,25 @@ def normalize_phone(raw: str | None) -> str | None:
 
 
 def parse_amount(raw: str | int) -> Decimal | None:
-    raise NotImplementedError
+    """
+    Parse a legacy amount into a money-safe Decimal.
+
+    The amount column holds either "N162,500" (N prefix, comma separators)
+    or a bare integer like 54550. Amounts are whole naira with no kobo,
+    so stripping to digits is safe for this data.
+
+    Returns a Decimal, never a float, or None when there are no digits
+    to parse.
+    """
+    text = str(raw).strip()
+    digits = "".join(
+        character for character in text if character.isdigit()
+    )
+
+    if not digits:
+        return None
+
+    return Decimal(digits)
 
 
 def build_order(row: dict) -> CanonicalOrder | RejectedRow:
