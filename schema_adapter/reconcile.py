@@ -206,7 +206,45 @@ def build_return(
     row: dict,
     return_row_index: int,
 ) -> CanonicalReturn | RejectedRow:
-    raise NotImplementedError
+    """
+    Build a CanonicalReturn from one raw returns CSV row, or quarantine it.
+
+    Returns have no order_id, so return_row_index identifies the row.
+    Required fields are name, phone, and amount; any failure quarantines
+    the row with a reason naming the failed field(s).
+
+    reason is soft (DECISION 013): a blank reason is stored as "" and
+    never causes rejection.
+    """
+    name = normalize_name(row.get("customer_name"), None)
+    phone = normalize_phone(row.get("phone"))
+    amount = parse_amount(row.get("amount"))
+    reason = _clean_optional_text(row.get("reason")) or ""
+
+    failures: list[str] = []
+
+    if name is None:
+        failures.append("no usable name")
+
+    if phone is None:
+        failures.append("no usable phone")
+
+    if amount is None:
+        failures.append("unparseable amount")
+
+    if failures:
+        return RejectedRow(
+            source=row,
+            reason="; ".join(failures),
+        )
+
+    return CanonicalReturn(
+        return_row=return_row_index,
+        customer_name=name,
+        phone=phone,
+        amount=amount,
+        reason=reason,
+    )
 
 
 def reconcile(

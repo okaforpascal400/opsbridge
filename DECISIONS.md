@@ -189,3 +189,18 @@ specifically because the generator emits whole-naira amounts with no kobo
 amounts were possible, digit-stripping would corrupt them and a decimal-aware parse would
 be required. Returning None on no-digits keeps the normalizer from crashing the batch.
 Locked by test_result_is_decimal_not_float and test_parses_naira_text_with_prefix_and_commas.
+
+### 020: Return canonicalization mirrors orders, with reason soft and no date (2026-09-06)
+Decision: build_return requires name, phone, and amount; any failure quarantines the row
+as a RejectedRow naming the failed field(s). Returns have no date and no order_id, so the
+source row index identifies the return. reason is soft (DECISION 013): blank or missing
+reason is stored as "" and never causes rejection.
+Alternatives: Require a reason; reject returns with an unmatched shape; carry a null
+reason instead of "".
+Why: Returns share the orders' required-vs-soft principle: name, phone, and amount are
+each needed for the record to be meaningful and matchable, while reason does not affect a
+return's identity or its match to an order, so it stays soft. The single-name column is
+reconciled through the same normalize_name helper by passing the second column as None.
+Storing "" rather than null for a missing reason keeps the canonical data faithful without
+inventing a value. Locked by the tests in test_build_return.py, including
+test_blank_reason_is_accepted_as_empty_string.
