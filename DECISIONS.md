@@ -190,6 +190,22 @@ amounts were possible, digit-stripping would corrupt them and a decimal-aware pa
 be required. Returning None on no-digits keeps the normalizer from crashing the batch.
 Locked by test_result_is_decimal_not_float and test_parses_naira_text_with_prefix_and_commas.
 
+### 019: Required vs soft fields for order canonicalization (2026-09-06)
+Decision: build_order treats name, phone, amount, and date as required: if any fails to
+canonicalize, the whole row is quarantined as a RejectedRow whose reason names every
+failed field. status is soft and never causes rejection; it always resolves to an
+OrderStatus (UNKNOWN when blank or unrecognized, per DECISION 016).
+Alternatives: Make every field required; make date or amount soft and keep the row with
+a null; stop at the first failure rather than reporting all.
+Why: A field is required when the record is meaningless or unmatchable without it. Name,
+phone, amount, and date each fail that test: no name means the order cannot be attributed
+or matched, no phone means it cannot be matched (phone is the join key), no amount or date
+means core order identity is missing. status passes the test: an order with an unclear
+state is still usable, so it resolves to UNKNOWN rather than blocking. Reasons list all
+failed fields, not just the first, so the quarantine bucket is actionable for an ops
+reviewer and countable as a Phase 6 metric. Locked by the rejection tests in
+test_build_order.py, including test_multiple_failures_named_in_reason.
+
 ### 020: Return canonicalization mirrors orders, with reason soft and no date (2026-09-06)
 Decision: build_return requires name, phone, and amount; any failure quarantines the row
 as a RejectedRow naming the failed field(s). Returns have no date and no order_id, so the
@@ -204,3 +220,17 @@ reconciled through the same normalize_name helper by passing the second column a
 Storing "" rather than null for a missing reason keeps the canonical data faithful without
 inventing a value. Locked by the tests in test_build_return.py, including
 test_blank_reason_is_accepted_as_empty_string.
+
+### 021: rapidfuzz for string similarity; scoring and thresholds are hand-written (2026-09-06)
+Decision: Use rapidfuzz (pinned 3.14.6) for raw name-string similarity in the fuzzy
+matcher. The confidence scoring, the weighting of phone vs name, and the HIGH/LOW/NONE
+thresholds are written by hand, not taken from any library default.
+Alternatives: Hand-roll the string-distance algorithm; use a heavier record-linkage
+library; blend name and phone with equal weight.
+Why: String-distance math (Levenshtein and its variants) is a solved, well-optimized
+problem, so a vetted library is the right tool and hand-rolling it would add risk without
+insight. The judgment that matters, and that an FDE is paid for, is how to combine
+signals and where to draw the accept/flag/reject lines; that logic stays hand-written and
+testable. Phone is weighted as the strong identity signal because normalize_phone makes
+exact comparison reliable, while names are deliberately noisy in the data, so name
+similarity confirms or flags rather than decides.
