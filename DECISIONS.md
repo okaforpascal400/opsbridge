@@ -162,3 +162,17 @@ guesses nor throws away the order. Both the expected blank ("") and an unexpecte
 (e.g. "cancelled") resolve to UNKNOWN; distinguishing them can be surfaced later as an
 observability metric. Locked by test_empty_string_is_unknown and
 test_unrecognized_value_is_unknown.
+
+### 017: Phones normalize to +234 plus the last ten digits (2026-09-06)
+Decision: normalize_phone strips a phone to digits, takes the last ten significant
+digits, and renders them as "+234" followed by those ten digits. A value that cannot
+yield ten digits returns None rather than raising.
+Alternatives: Store the national ("0"-prefixed) form; keep each phone in its original
+format; reject non-matching formats.
+Why: The phone is the join key for the fuzzy matcher, so the same real number in any of
+the three legacy formats (international, national, bare) must produce an identical
+canonical string. All three wrap the same ten significant digits, so last-ten-digits
+folding is the invariant that makes them equal, verified against the generator's own
+_local_number_of (legacy/seed_data.py:240-245). Returning None on too-few-digits keeps
+the normalizer from crashing the batch; the row builder decides whether a phone-less row
+is quarantined. Locked by test_all_three_formats_collapse_to_same_string.
