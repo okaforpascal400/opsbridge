@@ -252,3 +252,21 @@ The LOW tier is the honest-uncertainty middle, consistent with the human-in-the-
 model in DECISION 005: a silent wrong match is worse than an admitted "not sure". Every
 match carries a rationale so a reviewer can act without re-deriving the decision. Locked
 by test_phone_match_name_mismatch_is_low and the threshold tests in test_match_return.py.
+
+### 023: Pipeline isolates I/O from logic; hard-case seed deferred to Phase 6 (2026-09-06)
+Decision: schema_adapter/pipeline.py is the only module that touches I/O (Postgres for
+orders, the CSV for returns); reconcile.py stays pure and I/O-free. Against the seeded
+data the matcher returns 40/40 HIGH, which is correct because every seeded return
+corresponds to a real order whose phone normalizes to an exact match. The LOW and NONE
+tiers are exercised and proven by the unit tests, not by the seed. A labeled golden
+dataset with deliberate hard cases (orphans, name-only ambiguous) is deferred to Phase 6,
+where the eval harness will consume it.
+Alternatives: Rebuild the seed now to force LOW and NONE outcomes; blend I/O into the
+reconcile module.
+Why: Keeping logic pure and I/O in a thin shell makes the reconciliation fully testable
+without a database and is the reason the unit tests need no fixtures. The all-HIGH result
+is honestly explained rather than engineered away: on recoverable data, recovering
+everything is the right answer, and the discrimination tiers are demonstrated in the test
+suite (test_phone_match_name_mismatch_is_low, test_no_plausible_match_is_none). Building
+the golden dataset now, before the eval harness that reads it exists, would be premature;
+it belongs with Phase 6 where it earns its keep.
