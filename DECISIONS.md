@@ -270,3 +270,22 @@ everything is the right answer, and the discrimination tiers are demonstrated in
 suite (test_phone_match_name_mismatch_is_low, test_no_plausible_match_is_none). Building
 the golden dataset now, before the eval harness that reads it exists, would be premature;
 it belongs with Phase 6 where it earns its keep.
+
+### 024: Agent loop design - injected client, tool dispatch, iteration guard (2026-09-07)
+Decision: agent/loop.py exposes ask(question, client=None). The Anthropic client is
+injected and defaults to a real one, so the loop is tested with a stub (no network, no
+cost, deterministic in CI). A single _TOOL_FUNCTIONS dict is the source of truth for both
+the schemas sent to Claude and the dispatch when Claude requests a call. The loop runs
+until the model returns a final answer or a max-iteration guard (8) stops it. The model
+is Claude Sonnet 5, pinned in config. Phase 3 tools are read-only.
+Alternatives: A globally constructed client (simpler, untestable without the network);
+Opus or Fable for the model (more capable, materially more expensive for simple
+tool-orchestration); no iteration guard.
+Why: Injecting the client is what makes the loop unit-testable, so the tool-wiring is
+verified for free rather than by paying for live calls. Sonnet is chosen because the
+agent orchestrates tools rather than doing heavy reasoning, so the mid-tier model is
+capable and much cheaper, and it is one config line to change. The iteration guard stops
+a misbehaving model from looping forever. The agent has no special knowledge: it only
+knows the tools and composes their results, so every fact it states is grounded in a
+tested function rather than invented. Loop mechanics locked by the stubbed tests in
+test_loop.py.
