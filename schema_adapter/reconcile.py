@@ -5,9 +5,9 @@ Each normalizer is a small, pure, individually testable function.
 Row builders run the normalizers and either produce a canonical object
 or quarantine the row.
 
-The fuzzy matcher for returns to orders is deliberately built on top of
-canonicalized names and phones so the matching logic works with cleaned,
-comparable identity signals.
+Returns can then be matched against canonical orders using explicit,
+defensible scoring rules. Ambiguous matches are flagged for human review
+rather than silently guessed.
 """
 
 from __future__ import annotations
@@ -20,10 +20,16 @@ from rapidfuzz import fuzz
 from schema_adapter.models import (
     CanonicalOrder,
     CanonicalReturn,
+    MatchConfidence,
     OrderStatus,
     ReconciliationResult,
     RejectedRow,
+    ReturnMatch,
 )
+
+# ---------------------------------------------------------------------------
+# Status normalization
+# ---------------------------------------------------------------------------
 
 _STATUS_MAP: dict[str, OrderStatus] = {
     "confirmed": OrderStatus.CONFIRMED,
@@ -35,11 +41,22 @@ _STATUS_MAP: dict[str, OrderStatus] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Return-to-order matching policy
+# ---------------------------------------------------------------------------
+
 # Weights for combining the two identity signals. Phone dominates because
 # normalize_phone makes exact phone comparison reliable, while names are
 # deliberately noisy in the data, so name similarity confirms rather than decides.
 _PHONE_WEIGHT: float = 0.7
 _NAME_WEIGHT: float = 0.3
+
+# Thresholds that turn a blended score into a verdict.
+#
+# A phone match alone yields 0.7, so HIGH requires phone plus a strong name
+# match. A bare phone match lands in LOW and is flagged for human review.
+_HIGH_THRESHOLD: float = 0.85
+_LOW_THRESHOLD: float = 0.5
 
 
 def _score_candidate(
@@ -54,11 +71,11 @@ def _score_candidate(
     contributes the dominant weight.
 
     Name similarity uses rapidfuzz token_sort_ratio, scaled from 0-100
-    down to 0.0-1.0. It contributes a smaller share and confirms or
-    weakens the match.
+    to 0.0-1.0. It contributes a smaller share and confirms or weakens
+    the match.
 
-    The weighting means a phone match with a somewhat different name can
-    still score higher than a strong name match with a different phone.
+    A phone match with a differing name therefore scores higher than a
+    name match with a differing phone.
     """
     phone_signal = 1.0 if ret.phone == order.phone else 0.0
 
@@ -76,7 +93,83 @@ def _score_candidate(
     )
 
 
-def _clean_optional_text(value: str | None) -> str | None:
+def match_return_to_orders(
+    ret: CanonicalReturn,
+    orders: list[CanonicalOrder],
+) -> ReturnMatch:
+    """
+    Find the best-matching order for a return and report how confident the match is.
+
+    Every candidate is scored with _score_candidate; the highest-scoring order wins.
+
+    The score becomes a verdict:
+    - HIGH: auto-accept
+    - LOW: flag for human review
+    - NONE: no plausible match
+
+    When evidence is only partial, the matcher flags LOW rather than guessing.
+    An honest "not sure" is safer than a silent wrong match.
+    """
+    if not orders:
+        return ReturnMatch(
+            return_row=ret.return_row,
+            matched_order_id=None,
+            confidence=MatchConfidence.NONE,
+            score=0.0,
+            rationale="No candidate orders to match against.",
+        )
+
+    best_order = max(
+        orders,
+        key=lambda order: _score_candidate(ret, order),
+    )
+
+    best_score = _score_candidate(
+        ret,
+        best_order,
+    )
+
+    if best_score >= _HIGH_THRESHOLD:
+        confidence = MatchConfidence.HIGH
+        matched_id = best_order.order_id
+        rationale = (
+            f"Strong match to order {best_order.order_id}: "
+            f"phone and name both align (score {best_score:.2f})."
+        )
+
+    elif best_score >= _LOW_THRESHOLD:
+        confidence = MatchConfidence.LOW
+        matched_id = best_order.order_id
+        rationale = (
+            f"Partial match to order {best_order.order_id}: "
+            f"evidence is incomplete (score {best_score:.2f}). "
+            "Flagged for human review."
+        )
+
+    else:
+        confidence = MatchConfidence.NONE
+        matched_id = None
+        rationale = (
+            f"No plausible match "
+            f"(best score {best_score:.2f})."
+        )
+
+    return ReturnMatch(
+        return_row=ret.return_row,
+        matched_order_id=matched_id,
+        confidence=confidence,
+        score=best_score,
+        rationale=rationale,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Normalizers
+# ---------------------------------------------------------------------------
+
+def _clean_optional_text(
+    value: str | None,
+) -> str | None:
     """
     Return stripped text when usable, otherwise None.
     """
@@ -84,6 +177,7 @@ def _clean_optional_text(value: str | None) -> str | None:
         return None
 
     cleaned = value.strip()
+
     return cleaned if cleaned else None
 
 
@@ -95,13 +189,19 @@ def normalize_name(
     Reconcile the legacy `cust_name` and `customer` columns.
 
     `cust_name` has precedence when both columns contain usable values.
+
     We do not combine conflicting values because reconciliation should
     normalize source data, not invent new data.
     """
-    return _clean_optional_text(cust_name) or _clean_optional_text(customer)
+    return (
+        _clean_optional_text(cust_name)
+        or _clean_optional_text(customer)
+    )
 
 
-def parse_order_date(raw: str) -> date | None:
+def parse_order_date(
+    raw: str,
+) -> date | None:
     """
     Parse a legacy order date using the three known source formats.
 
@@ -125,22 +225,27 @@ def parse_order_date(raw: str) -> date | None:
 
     for fmt in formats:
         try:
-            return datetime.strptime(text, fmt).date()
+            return datetime.strptime(
+                text,
+                fmt,
+            ).date()
         except ValueError:
             continue
 
     return None
 
 
-def normalize_status(raw: str | None) -> OrderStatus:
+def normalize_status(
+    raw: str | None,
+) -> OrderStatus:
     """
     Map a legacy free-text status onto the OrderStatus enum.
 
-    Matching is case-insensitive and whitespace-tolerant. Both blank and
-    unrecognized values return UNKNOWN.
+    Matching is case-insensitive and whitespace-tolerant.
 
-    Unknown status does not make an order unusable, so it is represented
-    honestly instead of guessed or rejected.
+    Blank and unrecognized values return UNKNOWN. An unknown status does
+    not make an order unusable, so we record the uncertainty instead of
+    guessing or rejecting the row.
     """
     cleaned = _clean_optional_text(raw)
 
@@ -153,13 +258,16 @@ def normalize_status(raw: str | None) -> OrderStatus:
     )
 
 
-def normalize_phone(raw: str | None) -> str | None:
+def normalize_phone(
+    raw: str | None,
+) -> str | None:
     """
-    Normalize a legacy phone into one canonical form: "+234" plus the last
-    ten significant digits.
+    Normalize a legacy phone into one canonical form: "+234" plus the
+    last ten significant digits.
 
-    The legacy formats all wrap the same ten digits, so stripping to digits
-    and taking the last ten collapses them to one comparable representation.
+    The legacy formats all wrap the same ten digits, so stripping to
+    digits and taking the last ten collapses them into one comparable
+    representation.
 
     A value that cannot yield ten digits returns None rather than raising.
     """
@@ -180,11 +288,13 @@ def normalize_phone(raw: str | None) -> str | None:
     return f"+234{digits[-10:]}"
 
 
-def parse_amount(raw: str | int) -> Decimal | None:
+def parse_amount(
+    raw: str | int,
+) -> Decimal | None:
     """
     Parse a legacy amount into a money-safe Decimal.
 
-    The amount column holds either a formatted string such as "N162,500"
+    The amount column holds either a formatted value such as "N162,500"
     or a bare integer such as 54550.
 
     Amounts are whole naira with no kobo, so stripping to digits is safe
@@ -206,21 +316,21 @@ def parse_amount(raw: str | int) -> Decimal | None:
     return Decimal(digits)
 
 
+# ---------------------------------------------------------------------------
+# Row builders
+# ---------------------------------------------------------------------------
+
 def build_order(
     row: dict,
 ) -> CanonicalOrder | RejectedRow:
     """
     Build a CanonicalOrder from one raw legacy order row, or quarantine it.
 
-    Required fields are:
-    - name
-    - phone
-    - amount
-    - date
+    Required fields are name, phone, amount, and date.
 
-    Any failed required field causes the row to be quarantined. All failures
-    are reported together so the rejected row contains the full correction
-    picture.
+    Any failed required field causes the row to be quarantined. All
+    failures are reported together so the rejected row contains the
+    complete correction picture.
 
     Status is soft and always resolves to an OrderStatus.
     """
@@ -228,15 +338,19 @@ def build_order(
         row.get("cust_name"),
         row.get("customer"),
     )
+
     order_date = parse_order_date(
         row.get("order_date")
     )
+
     phone = normalize_phone(
         row.get("phone")
     )
+
     amount = parse_amount(
         row.get("amount")
     )
+
     status = normalize_status(
         row.get("status")
     )
@@ -278,13 +392,10 @@ def build_return(
     """
     Build a CanonicalReturn from one raw returns row, or quarantine it.
 
-    Returns do not have an order_id, so return_row_index identifies the
-    source row.
+    Returns have no order_id, so return_row_index identifies the source row.
 
-    Required fields are:
-    - name
-    - phone
-    - amount
+    Required fields are name, phone, and amount. Any failed required field
+    quarantines the row.
 
     `reason` is soft. Blank or missing reasons are stored as an empty
     string rather than causing rejection.
@@ -293,12 +404,15 @@ def build_return(
         row.get("customer_name"),
         None,
     )
+
     phone = normalize_phone(
         row.get("phone")
     )
+
     amount = parse_amount(
         row.get("amount")
     )
+
     reason = (
         _clean_optional_text(
             row.get("reason")
@@ -332,6 +446,10 @@ def build_return(
     )
 
 
+# ---------------------------------------------------------------------------
+# Reconciliation entrypoint
+# ---------------------------------------------------------------------------
+
 def reconcile(
     order_rows: list[dict],
     return_rows: list[dict],
@@ -339,11 +457,14 @@ def reconcile(
     """
     Run every raw row through its builder and collect the outcomes into one result.
 
-    Clean orders and returns go to their respective buckets. Rejected rows from
-    both sources are pooled into the shared `rejected` collection.
+    Clean orders and returns go to their respective buckets. Rejected rows
+    from both sources are pooled into the shared `rejected` collection.
 
-    Returns are indexed by their position in the input list because the source
-    does not provide an order_id.
+    Returns are indexed by their position in the input list because their
+    source does not provide an order_id.
+
+    Matching is deliberately separate from reconciliation. This function
+    establishes trustworthy canonical data first.
     """
     orders: list[CanonicalOrder] = []
     returns: list[CanonicalReturn] = []
@@ -352,7 +473,10 @@ def reconcile(
     for row in order_rows:
         built = build_order(row)
 
-        if isinstance(built, RejectedRow):
+        if isinstance(
+            built,
+            RejectedRow,
+        ):
             rejected.append(built)
         else:
             orders.append(built)
@@ -363,7 +487,10 @@ def reconcile(
             index,
         )
 
-        if isinstance(built, RejectedRow):
+        if isinstance(
+            built,
+            RejectedRow,
+        ):
             rejected.append(built)
         else:
             returns.append(built)
