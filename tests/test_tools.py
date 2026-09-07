@@ -2,19 +2,25 @@
 """
 Agent tool-layer tests.
 
-The tools are thin wrappers over the reconciliation pipeline, so these tests confirm the
-tool returns plain, correctly-shaped data (what a tool-calling API needs) and that its
-numbers agree with the pipeline it wraps. Gated on OPSBRIDGE_TEST_DATABASE_URL like the
-other DB integration tests, so it is skipped when no throwaway database is configured.
+The tools are thin wrappers over the reconciliation pipeline, so these tests confirm each
+tool returns plain, JSON-safe, correctly-shaped data and that its numbers agree with the
+pipeline it wraps. Gated on OPSBRIDGE_TEST_DATABASE_URL like the other DB integration
+tests, so they are skipped when no throwaway database is configured.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 
-from agent.tools import get_operations_summary
+from agent.tools import (
+    get_flagged_returns,
+    get_operations_summary,
+    get_quarantined_rows,
+    get_unmatched_returns,
+)
 from legacy.seed_db import seed
 from schema_adapter.pipeline import run_pipeline
 
@@ -34,6 +40,9 @@ def seeded(tmp_path: Path) -> tuple[str, Path]:
     returns_csv = tmp_path / "returns.csv"
     seed(database_url=database_url, returns_csv=returns_csv)
     return database_url, returns_csv
+
+
+# --- get_operations_summary ---------------------------------------------------------
 
 
 def test_summary_is_a_plain_dict(seeded: tuple[str, Path]) -> None:
@@ -60,7 +69,6 @@ def test_summary_has_the_expected_shape(seeded: tuple[str, Path]) -> None:
 
 
 def test_summary_numbers_agree_with_the_pipeline(seeded: tuple[str, Path]) -> None:
-    # the tool must not compute anything of its own; its numbers are the pipeline's
     database_url, returns_csv = seeded
     tool_result = get_operations_summary(database_url, returns_csv)
     summary, _result, _matches = run_pipeline(database_url, returns_csv)
@@ -69,10 +77,42 @@ def test_summary_numbers_agree_with_the_pipeline(seeded: tuple[str, Path]) -> No
     assert tool_result["matches"]["high_auto_accept"] == summary.matched_high
 
 
-def test_summary_values_are_json_safe(seeded: tuple[str, Path]) -> None:
-    # a tool result is handed to a tool-calling API, so it must serialize to JSON
-    import json
+# --- the list tools -----------------------------------------------------------------
 
+
+def test_unmatched_returns_shape_and_json_safe(seeded: tuple[str, Path]) -> None:
     database_url, returns_csv = seeded
-    result = get_operations_summary(database_url, returns_csv)
-    json.dumps(result)  # raises if any value is not JSON-serializable
+    result = get_unmatched_returns(database_url, returns_csv)
+    assert isinstance(result, list)
+    for item in result:
+        assert {"return_row", "score", "rationale"} <= item.keys()
+    json.dumps(result)
+
+
+def test_flagged_returns_shape_and_json_safe(seeded: tuple[str, Path]) -> None:
+    database_url, returns_csv = seeded
+    result = get_flagged_returns(database_url, returns_csv)
+    assert isinstance(result, list)
+    for item in result:
+        assert {"return_row", "candidate_order_id", "score", "rationale"} <= item.keys()
+    json.dumps(result)
+
+
+def test_quarantined_rows_shape_and_json_safe(seeded: tuple[str, Path]) -> None:
+    database_url, returns_csv = seeded
+    result = get_quarantined_rows(database_url, returns_csv)
+    assert isinstance(result, list)
+    for item in result:
+        assert {"source", "reason"} <= item.keys()
+    json.dumps(result)
+
+
+def test_tier_tools_partition_the_matches(seeded: tuple[str, Path]) -> None:
+    # the three match tiers reported by the summary must add up across the tools:
+    # HIGH is neither unmatched nor flagged, so unmatched + flagged + HIGH == canonical returns
+    database_url, returns_csv = seeded
+    summary = get_operations_summary(database_url, returns_csv)
+    unmatched = get_unmatched_returns(database_url, returns_csv)
+    flagged = get_flagged_returns(database_url, returns_csv)
+    assert len(unmatched) == summary["matches"]["none_no_match"]
+    assert len(flagged) == summary["matches"]["low_needs_review"]
