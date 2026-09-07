@@ -234,3 +234,21 @@ signals and where to draw the accept/flag/reject lines; that logic stays hand-wr
 testable. Phone is weighted as the strong identity signal because normalize_phone makes
 exact comparison reliable, while names are deliberately noisy in the data, so name
 similarity confirms or flags rather than decides.
+
+### 022: Match scoring weights and HIGH/LOW/NONE thresholds (2026-09-06)
+Decision: _score_candidate blends an exact-phone signal (weight 0.7) with a name
+similarity signal (rapidfuzz token_sort_ratio, scaled 0.0-1.0, weight 0.3).
+match_return_to_orders scores every candidate, takes the highest, and maps the score to
+a verdict: >= 0.85 is HIGH (auto-accept), >= 0.5 is LOW (flag for human review), below
+0.5 is NONE (no match, matched_order_id is None). An empty candidate list is NONE.
+Alternatives: Equal weighting of name and phone; hard-gating on an exact phone match;
+a single accept/reject threshold with no review tier.
+Why: Phone is the reliable identity signal because normalize_phone canonicalizes all
+formats, so it carries most of the weight; names are deliberately noisy, so name
+similarity confirms rather than decides. The thresholds follow from the weights: a phone
+match alone scores 0.7, which is deliberately treated as LOW (flag), not HIGH, because a
+matching phone with a mismatched name is exactly the ambiguous case a human should see.
+The LOW tier is the honest-uncertainty middle, consistent with the human-in-the-loop
+model in DECISION 005: a silent wrong match is worse than an admitted "not sure". Every
+match carries a rationale so a reviewer can act without re-deriving the decision. Locked
+by test_phone_match_name_mismatch_is_low and the threshold tests in test_match_return.py.
