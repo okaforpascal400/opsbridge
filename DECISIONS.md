@@ -315,3 +315,28 @@ outage mid-turn would leave history that fails every later request. The guard's 
 not kept because the model never said it. Locked by test_conversation.py, including
 test_second_turn_sees_the_first_exchange, test_tool_turns_are_kept_in_history, and
 test_failed_tool_leaves_history_unchanged.
+
+### 026: MCP server as a thin adapter; mcp SDK pinned to v1 (2026-09-07)
+Decision: mcp_server/server.py exposes the four existing read tools over the Model Context
+Protocol using the FastMCP high-level API. It is a thin adapter: each MCP tool calls the
+corresponding function in agent/tools.py, which is unchanged and already tested. The
+adapter adds only two protocol-level behaviors: each list result is wrapped in one JSON
+object, and each tool runs in a worker thread. The mcp dependency is pinned to 1.30.0, the
+latest 1.x release, not the v2 line.
+Alternatives: Use the mcp v2 SDK (MCPServer); use the separate standalone fastmcp package;
+reimplement the tool logic inside the server; return bare lists and run the tools on the
+event loop.
+Why: Keeping the server a thin adapter means the tested tool logic stays in one place and
+the MCP layer only advertises it, so the tests cover only what the adapter adds. The two
+protocol behaviors exist because of how FastMCP v1 works: it sends a bare list as one text
+block per item and an empty list as no text at all, so a client reading the text would see
+nothing where the answer is "none"; and it calls a sync tool directly on the event loop,
+where a slow database connect would stop the server from answering anything else. The v1
+pin is deliberate: mcp v2 (released 2026-07-28) is a breaking change that renamed FastMCP
+to MCPServer and removed mcp.server.fastmcp, and an unpinned install now resolves to v2,
+which would break the import. Pinning to 1.30.0 keeps the build reproducible and defers a
+v2 migration to a moment chosen on purpose rather than forced by a resolver. The cost:
+upstream now treats 1.x as a maintenance line that gets only critical bug and security
+fixes, and an exact pin will not pick those up, so it is bumped by hand; moving this
+adapter to v2 is an import and class rename. Locked by test_mcp_server.py, including
+test_each_tool_calls_its_own_function and test_empty_list_result_is_one_json_text_block.
