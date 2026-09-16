@@ -43,9 +43,9 @@ The AI-engineering core. Tool-calling agent over the canonical layer, with retri
 over the PDFs and the tools exposed via MCP.
 
 - [ ] Read tools: query_orders, get_delivery_status (parses partner XML), search_docs (RAG)
-- [ ] Tool-calling loop with the Anthropic API; model pinned in config
-- [ ] Session memory/state plus a documented context-assembly step
-- [ ] MCP server exposing the read tools
+- [x] Tool-calling loop with the Anthropic API; model pinned in config
+- [x] Session memory/state plus a documented context-assembly step
+- [x] MCP server exposing the read tools
 - [ ] Tests per tool plus a loop-level test with a stubbed model
 
 ## Phase 4: Guardrails and human-in-the-loop. Hats: 2, 3 (safety/security)

@@ -199,8 +199,8 @@ opsbridge/
   api/                 FastAPI app. Phase 1: /health only
   legacy/              the seeded mess: row generator, DB seed, partner API
   schema_adapter/      empty until Phase 2: canonical model and reconciliation
-  agent/               empty until Phase 3: tool-calling loop, tools, prompts, state
-  mcp_server/          empty until Phase 3: MCP exposure of the ops tools
+  agent/               read tools, tool schemas, tool-calling loop, and the Conversation
+  mcp_server/          FastMCP stdio server exposing the read tools
   guardrails/          empty until Phase 4: write-action policy and human confirmation
   observability/       empty until Phase 5: trace store and the /trace endpoint
   evals/               empty until Phase 6: golden dataset, scoring harness, report
