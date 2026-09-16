@@ -289,3 +289,29 @@ a misbehaving model from looping forever. The agent has no special knowledge: it
 knows the tools and composes their results, so every fact it states is grounded in a
 tested function rather than invented. Loop mechanics locked by the stubbed tests in
 test_loop.py.
+
+### 025: Multi-turn sessions via a Conversation over a shared run_turn (2026-09-07)
+Decision: The core loop is extracted into run_turn(messages, client), which runs one
+tool-calling turn against a caller-supplied message list. ask() is a thin wrapper that
+calls run_turn with a fresh single-question list. agent/conversation.py adds a
+Conversation class that owns a growing message list and appends each question, the
+tool_use and tool_result turns run_turn adds, and the final answer, so a later turn sees
+the full history. Context assembly is explicit: the whole message list is the context,
+nothing is summarized or dropped. A turn is all-or-nothing: it runs on a working copy that
+replaces the history only when the model ends it with a non-empty answer; if a tool or
+the model call raises, the answer is empty, or the iteration guard stops the loop, the
+history is left unchanged.
+Alternatives: Duplicate the loop in a separate conversation function; summarize old turns
+to save tokens; store history in a database; append to the live history and repair it
+after a failure.
+Why: Extracting run_turn lets one-shot and multi-turn share exactly one loop
+implementation, so there is no drift between them. Keeping the full history as the context
+is the simplest correct behavior for a session of this size and is easy to reason about
+and test; token-budget summarization is a later optimization that is not needed yet.
+Holding state in memory (not a database) is right for an interactive session and keeps the
+Conversation testable with a stub. The all-or-nothing turn exists because the API rejects
+a tool_use with no tool_result and an empty assistant message: without it, one database
+outage mid-turn would leave history that fails every later request. The guard's notice is
+not kept because the model never said it. Locked by test_conversation.py, including
+test_second_turn_sees_the_first_exchange, test_tool_turns_are_kept_in_history, and
+test_failed_tool_leaves_history_unchanged.
