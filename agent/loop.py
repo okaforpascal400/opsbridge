@@ -85,8 +85,14 @@ _SYSTEM_PROMPT = (
 
 _MAX_ITERATIONS = 8
 
+# Returned when the iteration guard stops the loop. Named so a caller can tell it apart
+# from a real answer the model wrote.
+ITERATION_LIMIT_MESSAGE = (
+    "Stopped after the maximum number of tool-use iterations without a final answer."
+)
 
-class _AnthropicLike(Protocol):
+
+class AnthropicLike(Protocol):
     """The slice of the Anthropic client this loop uses, so a stub can satisfy it."""
 
     @property
@@ -107,17 +113,19 @@ def _dispatch_tool(name: str) -> Any:
     return func()
 
 
-def ask(question: str, client: _AnthropicLike | None = None) -> str:
+def run_turn(messages: list[dict[str, Any]], client: AnthropicLike | None = None) -> str:
     """
-    Answer a natural-language operations question by letting Claude call the read tools.
+    Run one tool-calling turn against a caller-supplied message list and return the answer.
 
-    Runs the tool-use loop until the model returns a final text answer or the iteration
-    guard is hit. The client is injected for testability and defaults to a real one.
+    The message list is mutated in place: the assistant tool-use turns and the tool_result
+    turns are appended as the loop runs, so a caller that keeps the list has the full
+    context, tool calls included. The final response is not appended; a caller that keeps
+    the list appends the returned text itself. Runs until a final text answer or the
+    iteration guard, which returns ITERATION_LIMIT_MESSAGE instead. The client is injected
+    for testability and defaults to a real one.
     """
     active_client = client or _build_real_client()
     model = get_settings().anthropic_model
-
-    messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
 
     for _ in range(_MAX_ITERATIONS):
         response = active_client.messages.create(
@@ -129,12 +137,10 @@ def ask(question: str, client: _AnthropicLike | None = None) -> str:
         )
 
         if response.stop_reason != "tool_use":
-            # final answer: collect any text blocks and return them
             return "".join(
                 block.text for block in response.content if block.type == "text"
             ).strip()
 
-        # the model asked for one or more tool calls; run them and feed results back
         messages.append({"role": "assistant", "content": response.content})
         tool_results = []
         for block in response.content:
@@ -149,4 +155,15 @@ def ask(question: str, client: _AnthropicLike | None = None) -> str:
                 )
         messages.append({"role": "user", "content": tool_results})
 
-    return "Stopped after the maximum number of tool-use iterations without a final answer."
+    return ITERATION_LIMIT_MESSAGE
+
+
+def ask(question: str, client: AnthropicLike | None = None) -> str:
+    """
+    Answer a single natural-language question, with no conversation history.
+
+    A thin wrapper over run_turn for one-off queries: it starts a fresh message list with
+    just this question. For multi-turn sessions, use agent.conversation.Conversation.
+    """
+    messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
+    return run_turn(messages, client=client)

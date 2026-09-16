@@ -44,7 +44,9 @@ class _ScriptedClient:
         self.messages = self  # so `client.messages.create(...)` reaches create()
 
     def create(self, **kwargs: Any) -> SimpleNamespace:
-        self.calls.append(kwargs)
+        # copy the list: the loop keeps appending to it after this call returns, so the
+        # live reference would show later turns instead of what was actually sent
+        self.calls.append({**kwargs, "messages": list(kwargs["messages"])})
         return self._responses.pop(0)
 
 
@@ -53,6 +55,20 @@ def test_final_answer_with_no_tool_call_is_returned_directly():
     answer = ask("hi", client=client)
     assert answer == "Hello, ops."
     assert len(client.calls) == 1
+    assert client.calls[0]["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_ask_starts_fresh_each_call():
+    # ask() is one-shot: a second question must not carry the first exchange along
+    client = _ScriptedClient(
+        [
+            _response("end_turn", [_text_block("A.")]),
+            _response("end_turn", [_text_block("B.")]),
+        ]
+    )
+    ask("first", client=client)
+    ask("second", client=client)
+    assert client.calls[1]["messages"] == [{"role": "user", "content": "second"}]
 
 
 def test_tool_use_triggers_the_tool_then_returns_the_final_answer(monkeypatch):
@@ -88,6 +104,8 @@ def test_tool_use_triggers_the_tool_then_returns_the_final_answer(monkeypatch):
         )
 
     assert any(_has_tool_result(m) for m in second_call_messages)
+    assert [m["role"] for m in second_call_messages] == ["user", "assistant", "user"]
+    assert second_call_messages[2]["content"][0]["tool_use_id"] == "tu_1"
 
 
 def test_iteration_guard_stops_a_runaway_tool_loop(monkeypatch):
