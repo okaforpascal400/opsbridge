@@ -65,8 +65,8 @@ Make "trusted to act" real. The agent proposes; the human confirms.
 - [x] Three proposal types: confirm_order, hold_account, issue_refund_note
 - [x] Structured proposal object with rationale plus affected records
 - [x] Policy checks (for example refund note requires a matched return; hold requires a reason)
-- [~] Confirmation endpoint, only a confirmed proposal commits the write (confirm() is the
-  write path and is tested; the HTTP endpoint is not built)
+- [x] Confirmation endpoint, only a confirmed proposal commits the write (POST /confirm
+  reuses confirm(), the single audited write path)
 - [x] Tests: no write path exists that bypasses confirmation
 - [x] DECISIONS.md entry for the safety model
 
