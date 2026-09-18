@@ -13,9 +13,10 @@ Run it with:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from fastapi import Depends, FastAPI
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
 from config import get_settings
@@ -31,11 +32,19 @@ class HealthResponse(BaseModel):
 
 
 class ConfirmRequest(BaseModel):
-    """A human's confirmation of a proposed write action, posted as JSON."""
+    """A human's confirmation of a proposed write action, posted as JSON.
+
+    Extra fields are refused rather than ignored, so a client that sends something the
+    server does not act on (confirmed_by, say) gets a 422 naming it instead of a 200 that
+    quietly drops it. The rationale is capped because it lands in an append-only table
+    that nothing deletes from.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     action: ActionType
     order_id: int = Field(gt=0)
-    rationale: str = Field(min_length=1)
+    rationale: str = Field(min_length=1, max_length=2000)
     supporting_return_row: int | None = Field(default=None, ge=0)
 
 
@@ -55,6 +64,15 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
+def get_database_url() -> str:
+    """The database the confirm path reads and writes.
+
+    A FastAPI dependency so a test can override it and drive the route against a throwaway
+    database instead of the configured one.
+    """
+    return get_settings().database_url
+
+
 def _confirm_proposal(
     proposal: ActionProposal,
     database_url: str | None = None,
@@ -67,7 +85,9 @@ def _confirm_proposal(
     the server validates against live reconciliation data, not a snapshot the client held.
     """
     url = database_url or get_settings().database_url
-    _summary, result, matches = run_pipeline(database_url, returns_csv)
+    _summary, result, matches = run_pipeline(url, returns_csv)
+    # one engine per call: a confirmation is human-triggered, so the connection setup is
+    # not worth pooling unless this ever becomes a hot path
     engine = create_engine(url)
     try:
         verdict = confirm(
@@ -79,7 +99,10 @@ def _confirm_proposal(
 
 
 @app.post("/confirm", response_model=ConfirmResponse)
-def confirm_action(request: ConfirmRequest) -> ConfirmResponse:
+def confirm_action(
+    request: ConfirmRequest,
+    database_url: Annotated[str, Depends(get_database_url)],
+) -> ConfirmResponse:
     """Confirm a proposed write action over HTTP.
 
     The request body is validated by FastAPI (a malformed body is a 422). A well-formed
@@ -93,4 +116,4 @@ def confirm_action(request: ConfirmRequest) -> ConfirmResponse:
         rationale=request.rationale,
         supporting_return_row=request.supporting_return_row,
     )
-    return _confirm_proposal(proposal)
+    return _confirm_proposal(proposal, database_url=database_url)
