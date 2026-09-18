@@ -454,3 +454,26 @@ rule reads. An infrastructure failure (database unreachable, returns export miss
 currently an unlogged 500, which Phase 5 turns into a logged failure with a trace id.
 Locked by test_confirm_endpoint.py, including test_refused_confirm_writes_nothing and
 test_valid_confirm_writes_one_row, which both drive the real route.
+
+### 032: run_turn tracing observes without changing behavior; failures are recorded then re-raised (2026-09-18)
+Decision: run_turn takes an optional trace: Trace | None = None. When None (the default,
+so every existing caller is unchanged), nothing is traced and the returned answer is
+identical. When a Trace is passed, run_turn records a step per model call and per tool call
+(name, input, output, latency, error) and sets final_answer, but never changes control flow
+or the returned string, and never touches the database: the caller owns persistence. A tool
+that returns an {"error": ...} dict records that on its step; a tool that raises records a
+step with error=str(exc) and its real measured latency, then the exception is re-raised, so
+a crash is both visible in the trace and still fails loud. On the iteration-guard path the
+trace's final_answer is set to the limit message; on the raising path final_answer stays
+empty by design, because the turn produced no answer and the failing step carries the error.
+Alternatives: Bake tracing into the loop unconditionally; persist inside run_turn; swallow
+tool exceptions once recorded.
+Why: Keeping tracing optional and behavior-identical means observability is orthogonal to
+logic, proven by the existing loop tests passing unchanged and a test asserting the same
+answer with and without a trace. Keeping persistence in the caller keeps run_turn pure and
+database-free. Recording a raising tool before re-raising is the whole point of
+observability: the failure you most need to inspect is a crash, and it must be captured
+without being hidden. The failure handler catches Exception broadly, a documented exception
+to the catch-specific rule, because any failure deserves a trace step and narrowing it would
+drop the ones you most need. Locked by test_loop.py, including
+test_a_raising_tool_is_recorded_and_still_raises and the same-answer-with-and-without-trace test.
