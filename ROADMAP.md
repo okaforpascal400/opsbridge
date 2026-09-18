@@ -31,22 +31,33 @@ agent will later have to tame. Deploy something live on day one.
 The interview centerpiece. Hand-written by me. Reconciles every messy source into one
 canonical model. This is the "integrate into a messy existing stack" proof.
 
-- [ ] CanonicalOrder / CanonicalReturn pydantic models
-- [ ] Normalizers: dates (3 formats to ISO), phones (to E.164-ish), amounts, statuses
-- [ ] Fuzzy join: returns to orders on name plus phone, with a confidence score
-- [ ] Unresolved-match handling (never silently guess; flag low confidence)
-- [ ] Tests covering every messy variant seeded in Phase 1
-- [ ] DECISIONS.md entries for the reconciliation choices
+- [x] CanonicalOrder / CanonicalReturn pydantic models
+- [x] Normalizers: dates (3 formats to ISO), phones (to E.164-ish), amounts, statuses
+- [x] Fuzzy join: returns to orders on name plus phone, with a confidence score
+- [x] Unresolved-match handling (never silently guess; flag low confidence)
+- [x] Tests covering every messy variant seeded in Phase 1
+- [x] DECISIONS.md entries for the reconciliation choices
 
 ## Phase 3: Agent, tools, RAG, MCP. Hats: 2
 The AI-engineering core. Tool-calling agent over the canonical layer, with retrieval
 over the PDFs and the tools exposed via MCP.
 
-- [ ] Read tools: query_orders, get_delivery_status (parses partner XML), search_docs (RAG)
-- [ ] Tool-calling loop with the Anthropic API; model pinned in config
-- [ ] Session memory/state plus a documented context-assembly step
-- [ ] MCP server exposing the read tools
-- [ ] Tests per tool plus a loop-level test with a stubbed model
+- [x] Read tools: get_operations_summary, get_unmatched_returns, get_flagged_returns,
+  get_quarantined_rows
+- [x] Tool-calling loop with the Anthropic API; model pinned in config
+- [x] Session memory/state plus a documented context-assembly step
+- [x] MCP server exposing the read tools
+- [x] Tests per tool plus a loop-level test with a stubbed model
+
+### Deferred from Phase 3
+Planned for this phase but not built. The read tools that shipped are reconciliation tools
+over the orders table and the returns export. These two are deferred, not dropped:
+
+- [ ] get_delivery_status: read tool over the partner delivery API (parses its XML)
+- [ ] search_docs: RAG over the invoice PDFs
+
+RAG is deferred to a dedicated later phase because it needs the invoice PDFs (the Phase 1
+seed item, still open) and a vector store. The partner-API tool is deferred with it.
 
 ## Phase 4: Guardrails and human-in-the-loop. Hats: 2, 3 (safety/security)
 Make "trusted to act" real. The agent proposes; the human confirms.

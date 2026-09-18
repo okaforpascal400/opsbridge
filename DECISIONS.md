@@ -270,3 +270,73 @@ everything is the right answer, and the discrimination tiers are demonstrated in
 suite (test_phone_match_name_mismatch_is_low, test_no_plausible_match_is_none). Building
 the golden dataset now, before the eval harness that reads it exists, would be premature;
 it belongs with Phase 6 where it earns its keep.
+
+### 024: Agent loop design - injected client, tool dispatch, iteration guard (2026-09-07)
+Decision: agent/loop.py exposes ask(question, client=None). The Anthropic client is
+injected and defaults to a real one, so the loop is tested with a stub (no network, no
+cost, deterministic in CI). A single _TOOL_FUNCTIONS dict is the source of truth for both
+the schemas sent to Claude and the dispatch when Claude requests a call. The loop runs
+until the model returns a final answer or a max-iteration guard (8) stops it. The model
+is Claude Sonnet 5, pinned in config. Phase 3 tools are read-only.
+Alternatives: A globally constructed client (simpler, untestable without the network);
+Opus or Fable for the model (more capable, materially more expensive for simple
+tool-orchestration); no iteration guard.
+Why: Injecting the client is what makes the loop unit-testable, so the tool-wiring is
+verified for free rather than by paying for live calls. Sonnet is chosen because the
+agent orchestrates tools rather than doing heavy reasoning, so the mid-tier model is
+capable and much cheaper, and it is one config line to change. The iteration guard stops
+a misbehaving model from looping forever. The agent has no special knowledge: it only
+knows the tools and composes their results, so every fact it states is grounded in a
+tested function rather than invented. Loop mechanics locked by the stubbed tests in
+test_loop.py.
+
+### 025: Multi-turn sessions via a Conversation over a shared run_turn (2026-09-07)
+Decision: The core loop is extracted into run_turn(messages, client), which runs one
+tool-calling turn against a caller-supplied message list. ask() is a thin wrapper that
+calls run_turn with a fresh single-question list. agent/conversation.py adds a
+Conversation class that owns a growing message list and appends each question, the
+tool_use and tool_result turns run_turn adds, and the final answer, so a later turn sees
+the full history. Context assembly is explicit: the whole message list is the context,
+nothing is summarized or dropped. A turn is all-or-nothing: it runs on a working copy that
+replaces the history only when the model ends it with a non-empty answer; if a tool or
+the model call raises, the answer is empty, or the iteration guard stops the loop, the
+history is left unchanged.
+Alternatives: Duplicate the loop in a separate conversation function; summarize old turns
+to save tokens; store history in a database; append to the live history and repair it
+after a failure.
+Why: Extracting run_turn lets one-shot and multi-turn share exactly one loop
+implementation, so there is no drift between them. Keeping the full history as the context
+is the simplest correct behavior for a session of this size and is easy to reason about
+and test; token-budget summarization is a later optimization that is not needed yet.
+Holding state in memory (not a database) is right for an interactive session and keeps the
+Conversation testable with a stub. The all-or-nothing turn exists because the API rejects
+a tool_use with no tool_result and an empty assistant message: without it, one database
+outage mid-turn would leave history that fails every later request. The guard's notice is
+not kept because the model never said it. Locked by test_conversation.py, including
+test_second_turn_sees_the_first_exchange, test_tool_turns_are_kept_in_history, and
+test_failed_tool_leaves_history_unchanged.
+
+### 026: MCP server as a thin adapter; mcp SDK pinned to v1 (2026-09-07)
+Decision: mcp_server/server.py exposes the four existing read tools over the Model Context
+Protocol using the FastMCP high-level API. It is a thin adapter: each MCP tool calls the
+corresponding function in agent/tools.py, which is unchanged and already tested. The
+adapter adds only two protocol-level behaviors: each list result is wrapped in one JSON
+object, and each tool runs in a worker thread. The mcp dependency is pinned to 1.30.0, the
+latest 1.x release, not the v2 line.
+Alternatives: Use the mcp v2 SDK (MCPServer); use the separate standalone fastmcp package;
+reimplement the tool logic inside the server; return bare lists and run the tools on the
+event loop.
+Why: Keeping the server a thin adapter means the tested tool logic stays in one place and
+the MCP layer only advertises it, so the tests cover only what the adapter adds. The two
+protocol behaviors exist because of how FastMCP v1 works: it sends a bare list as one text
+block per item and an empty list as no text at all, so a client reading the text would see
+nothing where the answer is "none"; and it calls a sync tool directly on the event loop,
+where a slow database connect would stop the server from answering anything else. The v1
+pin is deliberate: mcp v2 (released 2026-07-28) is a breaking change that renamed FastMCP
+to MCPServer and removed mcp.server.fastmcp, and an unpinned install now resolves to v2,
+which would break the import. Pinning to 1.30.0 keeps the build reproducible and defers a
+v2 migration to a moment chosen on purpose rather than forced by a resolver. The cost:
+upstream now treats 1.x as a maintenance line that gets only critical bug and security
+fixes, and an exact pin will not pick those up, so it is bumped by hand; moving this
+adapter to v2 is an import and class rename. Locked by test_mcp_server.py, including
+test_each_tool_calls_its_own_function and test_empty_list_result_is_one_json_text_block.

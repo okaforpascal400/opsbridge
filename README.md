@@ -100,8 +100,9 @@ Requires Python 3.14 and Docker.
    Copy-Item .env.example .env
    ```
 
-   Nothing needs filling in for Phase 1. The defaults match the docker compose service,
-   and `ANTHROPIC_API_KEY` stays empty until Phase 3.
+   The database defaults match the docker compose service. `ANTHROPIC_API_KEY` is
+   required to run the agent, which calls the Anthropic API. The tests stub the model and
+   do not need it.
 
 3. Start Postgres and wait for it to report healthy.
 
@@ -198,9 +199,9 @@ ruff check .
 opsbridge/
   api/                 FastAPI app. Phase 1: /health only
   legacy/              the seeded mess: row generator, DB seed, partner API
-  schema_adapter/      empty until Phase 2: canonical model and reconciliation
-  agent/               empty until Phase 3: tool-calling loop, tools, prompts, state
-  mcp_server/          empty until Phase 3: MCP exposure of the ops tools
+  schema_adapter/      canonical models, normalizers, return-to-order matcher, pipeline
+  agent/               read tools, tool schemas, tool-calling loop, and the Conversation
+  mcp_server/          FastMCP stdio server exposing the read tools
   guardrails/          empty until Phase 4: write-action policy and human confirmation
   observability/       empty until Phase 5: trace store and the /trace endpoint
   evals/               empty until Phase 6: golden dataset, scoring harness, report
@@ -213,8 +214,8 @@ opsbridge/
   CLAUDE.md            working agreement for this repo
 ```
 
-The empty packages hold a one-line docstring naming their phase and nothing else. They
-stay empty in Phase 1 on purpose.
+The empty packages (guardrails/, observability/ and evals/) hold a one-line docstring
+naming their phase and nothing else. They stay empty until that phase starts, on purpose.
 
 ## CI
 
