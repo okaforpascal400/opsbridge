@@ -18,7 +18,11 @@ The rules (DECISION 004's actions, ROADMAP policy):
 - issue_refund_note:  a supporting return must exist AND have matched THIS order at HIGH
                       confidence. A LOW-confidence match is exactly the case the matcher
                       flagged as uncertain, so refunding on it would turn unresolved
-                      uncertainty into a money movement; the policy refuses that.
+                      uncertainty into a money movement; the policy refuses that. The
+                      return's amount must also not exceed the order's amount, because a
+                      refund cannot exceed what was paid; a smaller or equal amount is a
+                      partial or full refund and is allowed. That ceiling is checked only
+                      when the cited return is present in the returns list.
 - hold_account:       the order must exist; the rationale is the justification a human
                       reviews before the hold commits.
 """
@@ -27,7 +31,12 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from guardrails.models import ActionProposal, ActionType
-from schema_adapter.models import CanonicalOrder, MatchConfidence, ReturnMatch
+from schema_adapter.models import (
+    CanonicalOrder,
+    CanonicalReturn,
+    MatchConfidence,
+    ReturnMatch,
+)
 
 
 class PolicyResult(BaseModel):
@@ -39,8 +48,16 @@ class PolicyResult(BaseModel):
     reason: str = Field(min_length=1)
 
 
+def _find_order(order_id: int, orders: list[CanonicalOrder]) -> CanonicalOrder | None:
+    return next((o for o in orders if o.order_id == order_id), None)
+
+
+def _find_return(return_row: int, returns: list[CanonicalReturn]) -> CanonicalReturn | None:
+    return next((r for r in returns if r.return_row == return_row), None)
+
+
 def _order_exists(order_id: int, orders: list[CanonicalOrder]) -> bool:
-    return any(o.order_id == order_id for o in orders)
+    return _find_order(order_id, orders) is not None
 
 
 def _high_confidence_match(
@@ -58,9 +75,19 @@ def _high_confidence_match(
 def validate_proposal(
     proposal: ActionProposal,
     orders: list[CanonicalOrder],
-    matches: list[ReturnMatch],
+    returns: list[CanonicalReturn] | None = None,
+    matches: list[ReturnMatch] | None = None,
 ) -> PolicyResult:
-    """Return whether a proposed action is allowed, with a reason. Pure; commits nothing."""
+    """Return whether a proposed action is allowed, with a reason. Pure; commits nothing.
+
+    returns and matches default to empty, so a caller that has not run the pipeline gets
+    the strictest answer rather than a permissive one: with no matches every refund note
+    is rejected, and with no returns the amount ceiling is skipped but the HIGH-confidence
+    match is still required. Pass matches by keyword; it follows returns in the signature.
+    """
+    returns = returns or []
+    matches = matches or []
+
     if not proposal.rationale.strip():
         return PolicyResult(
             allowed=False,
@@ -104,6 +131,22 @@ def validate_proposal(
                     "match before issuing a refund note."
                 ),
             )
+        cited_return = _find_return(proposal.supporting_return_row, returns)
+        order = _find_order(proposal.order_id, orders)
+        if (
+            cited_return is not None
+            and order is not None
+            and cited_return.amount > order.amount
+        ):
+            return PolicyResult(
+                allowed=False,
+                reason=(
+                    f"Refund amount {cited_return.amount} exceeds order "
+                    f"{proposal.order_id} amount {order.amount}; a refund cannot exceed "
+                    "what was paid."
+                ),
+            )
+
         return PolicyResult(
             allowed=True,
             reason=(
