@@ -340,3 +340,33 @@ upstream now treats 1.x as a maintenance line that gets only critical bug and se
 fixes, and an exact pin will not pick those up, so it is bumped by hand; moving this
 adapter to v2 is an import and class rename. Locked by test_mcp_server.py, including
 test_each_tool_calls_its_own_function and test_empty_list_result_is_one_json_text_block.
+
+### 027: Write actions record to a new opsbridge.actions table; legacy is never mutated (2026-09-18)
+Decision: The three write actions (confirm_order, hold_account, issue_refund_note) are
+recorded in a new opsbridge.actions table in a separate schema. The legacy.orders table is
+treated as read-only source data and is never altered.
+Status: designed here. The table and the code that writes to it land with the confirmation
+endpoint; what exists today is the proposal contract and the policy gate.
+Alternatives: Add status/flag columns to legacy.orders and update rows in place.
+Why: An integration should not alter the source system's schema; in a real deployment you
+rarely have permission to, and doing so risks the source data's integrity. Recording
+actions in a separate audit table keeps legacy untouched, gives an immutable trail of who
+did what and why, and feeds observability later. It is the honest model of how an external
+agent acts on a system it does not own.
+
+### 028: Policy is validated at both propose time and confirm time (2026-09-18)
+Decision: The same pure validate_proposal runs when a proposal is created (propose time)
+and again immediately before the write commits (confirm time). It also rejects a proposal
+whose rationale is blank once stripped: the model's min_length=1 counts whitespace as
+content, so the gate is what enforces the ROADMAP rule that an action requires a reason.
+Alternatives: Validate only at propose time; validate only at confirm time.
+Why: Propose-time validation is a courtesy filter, a human never sees an impossible
+proposal. But it is not a guarantee, because state can drift between propose and confirm (a
+match could change, an order could be re-processed). The confirm-time re-check is the only
+validation that actually guards the database, so it must exist. Using one pure function for
+both keeps a single source of truth for "is this allowed". A refund note additionally
+requires a HIGH-confidence backing match to the exact return row it cites, so a match the
+system flagged as uncertain cannot be laundered into a money movement. Locked by
+test_policy.py, including test_refund_on_low_confidence_match_is_rejected,
+test_refund_when_the_cited_return_row_has_no_match_is_rejected and
+test_blank_rationale_is_rejected.
