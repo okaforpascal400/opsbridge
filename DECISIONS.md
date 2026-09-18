@@ -454,3 +454,72 @@ rule reads. An infrastructure failure (database unreachable, returns export miss
 currently an unlogged 500, which Phase 5 turns into a logged failure with a trace id.
 Locked by test_confirm_endpoint.py, including test_refused_confirm_writes_nothing and
 test_valid_confirm_writes_one_row, which both drive the real route.
+
+### 032: run_turn tracing observes without changing behavior; failures are recorded then re-raised (2026-09-18)
+Decision: run_turn takes an optional trace: Trace | None = None. When None (the default,
+so every existing caller is unchanged), nothing is traced and the returned answer is
+identical. When a Trace is passed, run_turn records a step per model call and per tool call
+(name, input, output, latency, error) and sets final_answer, but never changes control flow
+or the returned string, and never touches the database: the caller owns persistence. A tool
+that returns an {"error": ...} dict records that on its step; a tool that raises records a
+step with error=str(exc) and its real measured latency, then the exception is re-raised, so
+a crash is both visible in the trace and still fails loud. On the iteration-guard path the
+trace's final_answer is set to the limit message; on the raising path final_answer stays
+empty by design, because the turn produced no answer and the failing step carries the error.
+Alternatives: Bake tracing into the loop unconditionally; persist inside run_turn; swallow
+tool exceptions once recorded.
+Why: Keeping tracing optional and behavior-identical means observability is orthogonal to
+logic, proven by the existing loop tests passing unchanged and a test asserting the same
+answer with and without a trace. Keeping persistence in the caller keeps run_turn pure and
+database-free. Recording a raising tool before re-raising is the whole point of
+observability: the failure you most need to inspect is a crash, and it must be captured
+without being hidden. The failure handler catches Exception broadly, a documented exception
+to the catch-specific rule, because any failure deserves a trace step and narrowing it would
+drop the ones you most need. Locked by test_loop.py, including
+test_a_raising_tool_is_recorded_and_still_raises and the same-answer-with-and-without-trace test.
+
+### 033: Conversation persists a trace per turn, tolerant of both crashes and save failures (2026-09-18)
+Decision: Conversation.ask creates a Trace per turn, passes it to run_turn, times the whole
+turn, and persists it via save_trace. Two failure paths are handled so tracing never
+interferes with the conversation. First, the turn runs in a try and the save runs in a
+finally, so a turn that raises still persists its trace (with the failing step and the time
+it ran before failing), which is the trace most worth inspecting; the exception still
+propagates. Second, save_trace is wrapped so a persistence failure is swallowed: losing a
+trace is acceptable, losing an answer the agent already produced is not. Persistence is on by
+default (right for real use) and the stubbed unit tests opt out, so they never write to a
+database. last_trace_id is set before the turn so the trace of a raising turn is findable.
+Alternatives: Save only on success (loses the crash trace); let a save failure propagate
+(breaks a good turn); resolve an engine unconditionally (silently writes traces from every
+stubbed test into the dev database).
+Why: Observability must observe without interfering. Saving in a finally captures the exact
+turn a developer most needs, the one that failed. Swallowing a save failure keeps tracing
+additive: the user still gets their answer even if Postgres is down. The swallow catches
+Exception broadly (a documented exception to the catch-specific rule, the second after
+DECISION 032) because any persistence failure must be prevented from breaking a good turn;
+it is silent until Phase 5 structured logging gives it somewhere to report. Locked by
+test_conversation.py, including test_a_raising_turn_still_persists_its_trace and
+test_a_save_failure_does_not_break_the_turn.
+
+### 034: Audit rows carry an optional trace_id, correlated but not enforced (2026-09-18)
+Decision: The opsbridge.actions table gains a nullable trace_id column so a confirmation can
+be traced back to the agent turn that proposed it. It is nullable, not required, because a
+human can confirm directly through the HTTP endpoint with no agent turn behind it. It is a
+plain TEXT string, not a foreign key to opsbridge.traces, so an audit write never fails on a
+trace reference that was never saved, which matters because DECISION 033 lets a trace save
+fail silently: the action must still be recorded even if its trace was lost. The column is
+added by an idempotent ALTER TABLE ADD COLUMN IF NOT EXISTS in ensure_actions_table, so a
+database created before this change repairs itself on the next call rather than 500-ing,
+since CREATE TABLE IF NOT EXISTS never alters an existing table. The endpoint caps trace_id
+at 64 characters, matching the rationale cap.
+Alternatives: A required trace_id (breaks direct human confirms); a foreign key to the
+traces table (an audit write would fail when a trace was not persisted); a manual migration
+step (a database that predates the change 500s until someone remembers to run the SQL).
+Why: The correlation is what lets an auditor answer "which turn produced this row", closing
+a real gap DECISION 031 had deferred. Nullable and unenforced is the honest model given a
+turn may not exist and a trace may not have saved; the audit record's own integrity comes
+first. The self-healing DDL is the lightweight migration this project's scale warrants, and
+it is idempotent, verified by test_an_older_table_repairs_itself. Two limits are deliberately
+left open: attribution is caller-asserted (any client can stamp any id) and nothing outside
+tests supplies a trace_id yet, both bounded by the same missing authentication layer as the
+deferred confirmed_by field. Locked by test_actions.py including
+test_an_older_table_repairs_itself.

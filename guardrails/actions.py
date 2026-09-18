@@ -13,9 +13,11 @@ The actions table lives in a new opsbridge schema (DECISION 027): the legacy sch
 never touched, the table is created with IF NOT EXISTS, and nothing here updates or deletes
 a row, so the trail only grows. Append-only is a property of this code, not of the
 database: the application role still holds UPDATE and DELETE, so revoking them is a
-deployment step, not something this module can claim. The row records what was confirmed
-and why, but not who confirmed it: there is no confirmation endpoint or operator identity
-yet, so confirmed_by and trace_id land with the endpoint rather than as placeholders.
+deployment step, not something this module can claim. The row records what was confirmed,
+why, and, when the caller supplies one, the trace id of the agent turn behind it, which is
+nullable because a human can confirm with no turn to point at. It still does not record who
+confirmed: /confirm has no operator identity, so confirmed_by is the remaining deferred
+field and waits for an auth layer (DECISION 031).
 """
 from __future__ import annotations
 
@@ -34,6 +36,8 @@ ACTIONS_SCHEMA: Final[str] = "opsbridge"
 ACTIONS_TABLE: Final[str] = "actions"
 
 _CREATE_SCHEMA_SQL: Final[str] = f"CREATE SCHEMA IF NOT EXISTS {ACTIONS_SCHEMA}"
+# trace_id is nullable because a human can confirm straight through the HTTP endpoint with
+# no agent turn behind it, so a correlating trace may legitimately not exist.
 _CREATE_ACTIONS_SQL: Final[str] = f"""
 CREATE TABLE IF NOT EXISTS {ACTIONS_SCHEMA}.{ACTIONS_TABLE} (
     action_id             SERIAL PRIMARY KEY,
@@ -41,14 +45,23 @@ CREATE TABLE IF NOT EXISTS {ACTIONS_SCHEMA}.{ACTIONS_TABLE} (
     order_id              INTEGER NOT NULL,
     supporting_return_row INTEGER NULL,
     rationale             TEXT NOT NULL,
+    trace_id              TEXT NULL,
     committed_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 """
+# CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a database seeded before
+# trace_id existed would never gain the column and every insert would fail on it. This
+# repairs such a table in place and is a no-op on a fresh one, which keeps the schema
+# self-healing without a migration tool for a table this simple.
+_ADD_TRACE_ID_SQL: Final[str] = (
+    f"ALTER TABLE {ACTIONS_SCHEMA}.{ACTIONS_TABLE} "
+    "ADD COLUMN IF NOT EXISTS trace_id TEXT NULL"
+)
 _INSERT_ACTION_SQL: Final[str] = f"""
 INSERT INTO {ACTIONS_SCHEMA}.{ACTIONS_TABLE}
-    (action, order_id, supporting_return_row, rationale)
+    (action, order_id, supporting_return_row, rationale, trace_id)
 VALUES
-    (:action, :order_id, :supporting_return_row, :rationale)
+    (:action, :order_id, :supporting_return_row, :rationale, :trace_id)
 """
 
 
@@ -83,6 +96,7 @@ def ensure_actions_table(engine: Engine) -> None:
     """
     _execute_ignoring_lost_race(engine, _CREATE_SCHEMA_SQL)
     _execute_ignoring_lost_race(engine, _CREATE_ACTIONS_SQL)
+    _execute_ignoring_lost_race(engine, _ADD_TRACE_ID_SQL)
 
 
 def propose(
@@ -107,6 +121,7 @@ def confirm(
     returns: list[CanonicalReturn] | None = None,
     *,
     matches: list[ReturnMatch] | None = None,
+    trace_id: str | None = None,
 ) -> PolicyResult:
     """Re-validate a proposal and, only if it passes, write it to the audit table.
 
@@ -121,6 +136,10 @@ def confirm(
     skips the amount ceiling when it cannot find that return, which is a harmless gap for
     an inert verdict but not next to a write: it would let a refund above the order amount
     reach the audit table.
+
+    Pass trace_id to tie the row to the agent turn that proposed the action. It is optional
+    because a human can confirm directly, with no turn behind it, and a row with no trace
+    is honest about that rather than carrying a made-up id.
     """
     result = validate_proposal(proposal, orders, returns, matches=matches)
     if not result.allowed:
@@ -147,6 +166,7 @@ def confirm(
                 "order_id": proposal.order_id,
                 "supporting_return_row": proposal.supporting_return_row,
                 "rationale": proposal.rationale,
+                "trace_id": trace_id,
             },
         )
     return result
