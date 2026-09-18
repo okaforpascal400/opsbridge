@@ -340,3 +340,117 @@ upstream now treats 1.x as a maintenance line that gets only critical bug and se
 fixes, and an exact pin will not pick those up, so it is bumped by hand; moving this
 adapter to v2 is an import and class rename. Locked by test_mcp_server.py, including
 test_each_tool_calls_its_own_function and test_empty_list_result_is_one_json_text_block.
+
+### 027: Write actions record to a new opsbridge.actions table; legacy is never mutated (2026-09-18)
+Decision: The three write actions (confirm_order, hold_account, issue_refund_note) are
+recorded in a new opsbridge.actions table in a separate schema. The legacy.orders table is
+treated as read-only source data and is never altered.
+Status: designed here. The table and the code that writes to it land with the confirmation
+endpoint; what exists today is the proposal contract and the policy gate.
+Alternatives: Add status/flag columns to legacy.orders and update rows in place.
+Why: An integration should not alter the source system's schema; in a real deployment you
+rarely have permission to, and doing so risks the source data's integrity. Recording
+actions in a separate audit table keeps legacy untouched, gives an immutable trail of who
+did what and why, and feeds observability later. It is the honest model of how an external
+agent acts on a system it does not own.
+
+### 028: Policy is validated at both propose time and confirm time (2026-09-18)
+Decision: The same pure validate_proposal runs when a proposal is created (propose time)
+and again immediately before the write commits (confirm time). It also rejects a proposal
+whose rationale is blank once stripped: the model's min_length=1 counts whitespace as
+content, so the gate is what enforces the ROADMAP rule that an action requires a reason.
+Alternatives: Validate only at propose time; validate only at confirm time.
+Why: Propose-time validation is a courtesy filter, a human never sees an impossible
+proposal. But it is not a guarantee, because state can drift between propose and confirm (a
+match could change, an order could be re-processed). The confirm-time re-check is the only
+validation that actually guards the database, so it must exist. Using one pure function for
+both keeps a single source of truth for "is this allowed". A refund note additionally
+requires a HIGH-confidence backing match to the exact return row it cites, so a match the
+system flagged as uncertain cannot be laundered into a money movement. Locked by
+test_policy.py, including test_refund_on_low_confidence_match_is_rejected,
+test_refund_when_the_cited_return_row_has_no_match_is_rejected and
+test_blank_rationale_is_rejected.
+
+### 029: Confirm status rule, refund amount ceiling, and their deliberate scope (2026-09-18)
+Decision: Two policy rules were added beyond order-existence and the HIGH-confidence match.
+(1) confirm_order is allowed only when the order status is PENDING or UNKNOWN; a CONFIRMED,
+DELIVERED, or RETURNED order is rejected, because confirming an order that has already moved
+past confirmation records an action that says nothing true. (2) A refund note is rejected
+when the cited return's amount exceeds the order amount; equal or less is a full or partial
+refund and is allowed. That ceiling is checked only when the caller passes the returns list
+and the cited row is in it, because returns defaults to empty; the HIGH-confidence match is
+required either way. The scope of the status rule is deliberate and tested: it applies to
+confirm only, so a delivered or returned order can still be refunded or held (you refund
+based on a valid matched return, not fulfillment status); and an UNKNOWN status is
+confirmable, which per DECISION 016 includes both blank and unrecognized source statuses, on
+the grounds that confirm commits nothing on its own and a human reviews the rationale.
+Alternatives: Make confirm status-blind; block refunds and holds on terminal statuses too;
+treat UNKNOWN as non-confirmable.
+Why: These are the checks a reviewer expects on a money and state action. Blocking a
+re-confirm keeps the audit trail honest. Capping the refund at the order amount stops any
+single refund note paying out more than the order was worth. It is a per-note ceiling, not a
+running total: the gate is stateless and holds no record of notes already issued, so two
+returns that both match one order can each pass, and aggregate exposure per order is a
+separate check that lands with the actions table in DECISION 027. Scoping the status rule to
+confirm, and asserting that scope with tests (test_terminal_status_does_not_block_refund,
+test_terminal_status_does_not_block_hold), stops the natural refactor of hoisting that check
+above the action if-chain from silently changing refund or hold policy. The amount ceiling
+has no equivalent scope test yet. Locked by test_policy.py, including
+test_confirm_delivered_order_is_rejected and test_refund_above_the_order_amount_is_rejected.
+
+### 030: confirm() is the sole write path; propose validates, confirm re-validates and writes (2026-09-18)
+Decision: guardrails/actions.py splits the flow in two. propose() runs the policy and
+returns the verdict, touching nothing. confirm() re-runs the same policy at confirm time
+and writes an audit row to opsbridge.actions ONLY when the policy allows. confirm() is the
+only function that writes to the actions table, so no action can be recorded without
+passing confirmation. It validates the state it is handed rather than re-reading the
+sources, so the caller must pass state read at confirm time, and a refund note must carry
+its cited return, because the amount ceiling is skipped when that return is missing
+(DECISION 029) and a skipped ceiling next to a write is not acceptable. The table is
+created with IF NOT EXISTS in a separate opsbridge schema and is never dropped, and
+nothing here updates or deletes a row, so the trail only grows; the legacy schema is never
+touched.
+Alternatives: A single act() that validates and writes in one call; writing at propose
+time and rolling back on rejection; storing actions by mutating legacy.orders.
+Why: Separating propose from confirm makes the human-in-the-loop model enforceable rather
+than aspirational: the agent can only ever produce an inert proposal, and a write requires
+a distinct confirm step. confirm re-validates instead of trusting the earlier propose
+because state can drift in between (DECISION 028), so the check that actually guards the
+database is the one next to the write. Append-only in a separate schema keeps an honest
+record and leaves the source data intact (DECISION 027), but the table is append-only by
+construction, not by permission: the application role still holds UPDATE and DELETE, so
+revoking them is a deployment step rather than something this code can claim. The row
+records what was confirmed and why, not who confirmed it; confirmed_by and trace_id land
+with the confirmation endpoint. That endpoint is still open in ROADMAP Phase 4, so this
+supersedes 027's Status line: the table and its write path landed ahead of it. Locked by
+test_actions.py, including test_confirming_a_rejected_proposal_writes_nothing,
+test_confirm_revalidates_against_state_that_drifted_since_propose, and
+test_propose_never_writes_even_when_allowed.
+
+### 031: /confirm HTTP endpoint reuses the audited confirm path (2026-09-18)
+Decision: api/main.py adds POST /confirm, the HTTP surface for a human to confirm a
+proposed action. The route validates the request body with a pydantic model that forbids
+unknown fields and caps the rationale (a malformed body is a 422), builds an
+ActionProposal, and calls the same guardrails.actions.confirm() used everywhere else. The
+server fetches confirm-time reconciliation state itself and validates against it; the
+client sends only the proposal. A policy-refused proposal returns 200 with allowed=false,
+and only an allowed one writes one audit row.
+Alternatives: A new endpoint-specific write path; trusting proposal state sent by the
+client; returning an error status for a policy refusal.
+Why: Reusing confirm() means the HTTP path has no write path of its own, so every guardrail
+(re-validation, the refund rules, append-only audit) applies to HTTP callers without being
+re-implemented or able to drift. The server reading its own confirm-time state honors
+DECISION 028: a client cannot smuggle a stale or forged snapshot to slip a proposal past
+the policy. A refusal is a valid business outcome, not a server error, so it is a 200 with
+allowed=false, while a malformed request is a 422 caught at the boundary.
+Scope, deliberately left open. The endpoint has no authentication: anything that can reach
+the port can confirm, so the "human" in human-in-the-loop is whoever holds network access
+until an auth layer lands. It records no operator identity, which supersedes DECISION 030's
+expectation that confirmed_by and trace_id would arrive with the endpoint; they move to
+Phase 5 with the trace store. It is not idempotent either: the same body posted twice
+writes two audit rows, and the confirm_order status rule cannot prevent that, because
+DECISION 027 forbids mutating legacy.orders, so a confirmation never changes the status the
+rule reads. An infrastructure failure (database unreachable, returns export missing) is
+currently an unlogged 500, which Phase 5 turns into a logged failure with a trace id.
+Locked by test_confirm_endpoint.py, including test_refused_confirm_writes_nothing and
+test_valid_confirm_writes_one_row, which both drive the real route.

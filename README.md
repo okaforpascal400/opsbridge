@@ -169,11 +169,14 @@ pytest
 The pure fixture tests, the partner API tests and the health test run anywhere with no
 database.
 
-The database tests in `tests/test_seed.py` run the real seed, so they are gated on the
-`OPSBRIDGE_TEST_DATABASE_URL` environment variable and skip with an explanatory message
-when it is unset. Point it at a throwaway database, never at your development one: the
-seed drops and recreates the `legacy` schema. pytest reads this from the process
-environment, not from `.env`, so set it in the shell you run pytest in.
+The database tests are gated on the `OPSBRIDGE_TEST_DATABASE_URL` environment variable and
+skip with an explanatory message when it is unset: `tests/test_seed.py` (the seed round
+trip), `tests/test_pipeline.py` and `tests/test_tools.py` (the pipeline and the read tools
+over seeded data), and `tests/test_actions.py` (the confirm flow, which writes audit rows).
+Point it at a throwaway database, never at your development one: the seed drops and
+recreates the `legacy` schema, and the confirm tests empty `opsbridge.actions` between
+tests. pytest reads this from the process environment, not from `.env`, so set it in the
+shell you run pytest in.
 
 PowerShell:
 
@@ -202,7 +205,8 @@ opsbridge/
   schema_adapter/      canonical models, normalizers, return-to-order matcher, pipeline
   agent/               read tools, tool schemas, tool-calling loop, and the Conversation
   mcp_server/          FastMCP stdio server exposing the read tools
-  guardrails/          empty until Phase 4: write-action policy and human confirmation
+  guardrails/          proposal contract, policy gate, and the confirm flow that writes
+                       to the append-only opsbridge.actions table
   observability/       empty until Phase 5: trace store and the /trace endpoint
   evals/               empty until Phase 6: golden dataset, scoring harness, report
   tests/               pytest suite
@@ -214,8 +218,8 @@ opsbridge/
   CLAUDE.md            working agreement for this repo
 ```
 
-The empty packages (guardrails/, observability/ and evals/) hold a one-line docstring
-naming their phase and nothing else. They stay empty until that phase starts, on purpose.
+The empty packages (observability/ and evals/) hold a one-line docstring naming their
+phase and nothing else. They stay empty until that phase starts, on purpose.
 
 ## CI
 

@@ -16,6 +16,7 @@ a stub, no network, deterministic, free in CI.
 """
 from __future__ import annotations
 
+import inspect
 import json
 from typing import Any, Protocol
 
@@ -24,6 +25,7 @@ from agent.tools import (
     get_operations_summary,
     get_quarantined_rows,
     get_unmatched_returns,
+    propose_action,
 )
 from config import get_settings
 
@@ -35,6 +37,7 @@ _TOOL_FUNCTIONS = {
     "get_unmatched_returns": get_unmatched_returns,
     "get_flagged_returns": get_flagged_returns,
     "get_quarantined_rows": get_quarantined_rows,
+    "propose_action": propose_action,
 }
 
 _TOOL_SCHEMAS = [
@@ -74,7 +77,50 @@ _TOOL_SCHEMAS = [
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "propose_action",
+        "description": (
+            "Propose a write action for a human to confirm, and return whether the "
+            "guardrail policy allows it, with a reason. This never commits: an allowed "
+            "proposal still needs a separate human confirmation step. Use when asked to "
+            "confirm an order, hold an account, or issue a refund note."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["confirm_order", "hold_account", "issue_refund_note"],
+                    "description": "which write action to propose",
+                },
+                "order_id": {
+                    "type": "integer",
+                    "description": "the order the action targets",
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": "why the action is proposed; a human reads this",
+                },
+                "supporting_return_row": {
+                    "type": "integer",
+                    "description": (
+                        "the matched return that justifies a refund note; required for "
+                        "issue_refund_note"
+                    ),
+                },
+            },
+            "required": ["action", "order_id", "rationale"],
+        },
+    },
 ]
+
+# What each tool is allowed to receive, derived from the schemas above so the two cannot
+# drift. A tool registered without a schema gets nothing, which fails loudly on a tool
+# that needs arguments rather than quietly passing unvetted input.
+_TOOL_INPUT_KEYS: dict[str, set[str]] = {
+    schema["name"]: set(schema["input_schema"].get("properties", {}))
+    for schema in _TOOL_SCHEMAS
+}
 
 _SYSTEM_PROMPT = (
     "You are an operations assistant for OpsBridge. Answer questions about the "
@@ -105,12 +151,38 @@ def _build_real_client() -> Any:
     return Anthropic(api_key=get_settings().anthropic_api_key)
 
 
-def _dispatch_tool(name: str) -> Any:
-    """Run the named tool against the configured sources and return its result."""
+def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> Any:
+    """Run the named tool with the input Claude supplied and return its result.
+
+    The input is filtered to the keys the tool's schema declares, so the model can only
+    reach parameters that were deliberately exposed. The tool functions take more than
+    they advertise (database_url and returns_csv exist for tests), and those stay
+    unreachable. The read tools declare nothing, so Claude sends an empty object and
+    func(**{}) is just func(); propose_action takes its proposal fields this way.
+
+    A call the tool's signature will not accept, such as a required argument the model left
+    out, comes back as an error dict like an unknown tool name does, so the model can read
+    it and try again instead of the turn ending on an exception. That check is a signature
+    bind, not a try around the call, so a TypeError raised inside a tool stays a crash and
+    is not disguised as a bad call.
+    """
     func = _TOOL_FUNCTIONS.get(name)
     if func is None:
         return {"error": f"unknown tool: {name}"}
-    return func()
+    allowed_keys = _TOOL_INPUT_KEYS.get(name, set())
+    filtered_input = {
+        key: value for key, value in tool_input.items() if key in allowed_keys
+    }
+    try:
+        inspect.signature(func).bind(**filtered_input)
+    except TypeError as exc:
+        return {
+            "error": (
+                f"invalid arguments for tool {name}: {exc}. "
+                f"Supplied: {sorted(filtered_input)}."
+            )
+        }
+    return func(**filtered_input)
 
 
 def run_turn(messages: list[dict[str, Any]], client: AnthropicLike | None = None) -> str:
@@ -145,7 +217,7 @@ def run_turn(messages: list[dict[str, Any]], client: AnthropicLike | None = None
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                result = _dispatch_tool(block.name)
+                result = _dispatch_tool(block.name, block.input)
                 tool_results.append(
                     {
                         "type": "tool_result",
