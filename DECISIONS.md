@@ -397,3 +397,32 @@ test_terminal_status_does_not_block_hold), stops the natural refactor of hoistin
 above the action if-chain from silently changing refund or hold policy. The amount ceiling
 has no equivalent scope test yet. Locked by test_policy.py, including
 test_confirm_delivered_order_is_rejected and test_refund_above_the_order_amount_is_rejected.
+
+### 030: confirm() is the sole write path; propose validates, confirm re-validates and writes (2026-09-18)
+Decision: guardrails/actions.py splits the flow in two. propose() runs the policy and
+returns the verdict, touching nothing. confirm() re-runs the same policy at confirm time
+and writes an audit row to opsbridge.actions ONLY when the policy allows. confirm() is the
+only function that writes to the actions table, so no action can be recorded without
+passing confirmation. It validates the state it is handed rather than re-reading the
+sources, so the caller must pass state read at confirm time, and a refund note must carry
+its cited return, because the amount ceiling is skipped when that return is missing
+(DECISION 029) and a skipped ceiling next to a write is not acceptable. The table is
+created with IF NOT EXISTS in a separate opsbridge schema and is never dropped, and
+nothing here updates or deletes a row, so the trail only grows; the legacy schema is never
+touched.
+Alternatives: A single act() that validates and writes in one call; writing at propose
+time and rolling back on rejection; storing actions by mutating legacy.orders.
+Why: Separating propose from confirm makes the human-in-the-loop model enforceable rather
+than aspirational: the agent can only ever produce an inert proposal, and a write requires
+a distinct confirm step. confirm re-validates instead of trusting the earlier propose
+because state can drift in between (DECISION 028), so the check that actually guards the
+database is the one next to the write. Append-only in a separate schema keeps an honest
+record and leaves the source data intact (DECISION 027), but the table is append-only by
+construction, not by permission: the application role still holds UPDATE and DELETE, so
+revoking them is a deployment step rather than something this code can claim. The row
+records what was confirmed and why, not who confirmed it; confirmed_by and trace_id land
+with the confirmation endpoint. That endpoint is still open in ROADMAP Phase 4, so this
+supersedes 027's Status line: the table and its write path landed ahead of it. Locked by
+test_actions.py, including test_confirming_a_rejected_proposal_writes_nothing,
+test_confirm_revalidates_against_state_that_drifted_since_propose, and
+test_propose_never_writes_even_when_allowed.
