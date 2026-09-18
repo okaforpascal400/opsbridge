@@ -16,6 +16,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+import agent.loop as loop_module
 from agent.loop import ask
 
 
@@ -78,7 +81,7 @@ def test_tool_use_triggers_the_tool_then_returns_the_final_answer(monkeypatch):
     monkeypatch.setattr(
         loop_module,
         "_dispatch_tool",
-        lambda name: {"orders_in": 200, "tool_called": name},
+        lambda name, _input: {"orders_in": 200, "tool_called": name},
     )
 
     client = _ScriptedClient(
@@ -111,7 +114,7 @@ def test_tool_use_triggers_the_tool_then_returns_the_final_answer(monkeypatch):
 def test_iteration_guard_stops_a_runaway_tool_loop(monkeypatch):
     import agent.loop as loop_module
 
-    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name: {"ok": True})
+    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name, _input: {"ok": True})
 
     # a client that ALWAYS asks for another tool call, never finishing
     class _NeverStops:
@@ -141,3 +144,185 @@ def test_unknown_tool_name_is_handled_gracefully(monkeypatch):
     )
     answer = ask("call a bad tool", client=client)
     assert answer == "Sorry, I could not do that."
+
+
+def test_dispatch_forwards_tool_input_as_keyword_arguments(monkeypatch):
+    # propose_action takes its proposal fields from the model's tool input, so whatever
+    # Claude puts in block.input has to arrive as kwargs on the tool function
+    captured = {}
+
+    def _fake_tool(**kwargs):
+        captured.update(kwargs)
+        return {"allowed": True, "reason": "stub"}
+
+    monkeypatch.setitem(loop_module._TOOL_FUNCTIONS, "propose_action", _fake_tool)
+    result = loop_module._dispatch_tool(
+        "propose_action",
+        {"action": "confirm_order", "order_id": 5, "rationale": "looks right"},
+    )
+
+    assert result == {"allowed": True, "reason": "stub"}
+    assert captured == {"action": "confirm_order", "order_id": 5, "rationale": "looks right"}
+
+
+def test_loop_passes_the_blocks_input_to_the_tool(monkeypatch):
+    # the same path end to end: the loop must hand block.input to the dispatcher, not {}
+    received = {}
+
+    def _capture(name, tool_input):
+        received["name"] = name
+        received["input"] = tool_input
+        return {"allowed": False, "reason": "stub"}
+
+    monkeypatch.setattr(loop_module, "_dispatch_tool", _capture)
+    block = SimpleNamespace(
+        type="tool_use",
+        name="propose_action",
+        id="tu_1",
+        input={"action": "hold_account", "order_id": 5, "rationale": "fraud"},
+    )
+    client = _ScriptedClient(
+        [
+            _response("tool_use", [block]),
+            _response("end_turn", [_text_block("Proposed.")]),
+        ]
+    )
+
+    assert ask("hold order 5", client=client) == "Proposed."
+    assert received["name"] == "propose_action"
+    assert received["input"] == {"action": "hold_account", "order_id": 5, "rationale": "fraud"}
+
+
+def test_read_tools_still_dispatch_with_an_empty_input(monkeypatch):
+    # Claude sends {} for the no-argument read tools, and func(**{}) must still work
+    monkeypatch.setitem(
+        loop_module._TOOL_FUNCTIONS, "get_operations_summary", lambda: {"orders_in": 200}
+    )
+    assert loop_module._dispatch_tool("get_operations_summary", {}) == {"orders_in": 200}
+
+
+def test_propose_action_is_registered_with_its_schema():
+    # the tool the agent needs for write proposals must be dispatchable and advertised
+    assert "propose_action" in loop_module._TOOL_FUNCTIONS
+    schema = next(s for s in loop_module._TOOL_SCHEMAS if s["name"] == "propose_action")
+    properties = schema["input_schema"]["properties"]
+    assert schema["input_schema"]["required"] == ["action", "order_id", "rationale"]
+    assert properties["action"]["enum"] == [
+        "confirm_order",
+        "hold_account",
+        "issue_refund_note",
+    ]
+    assert "supporting_return_row" in properties
+
+
+def test_undeclared_tool_input_keys_are_stripped(monkeypatch):
+    # the model can only reach parameters the schema advertises: propose_action also
+    # takes database_url and returns_csv, and those must stay unreachable
+    captured = {}
+
+    def _fake_tool(**kwargs):
+        captured.update(kwargs)
+        return {"allowed": True, "reason": "stub"}
+
+    monkeypatch.setitem(loop_module._TOOL_FUNCTIONS, "propose_action", _fake_tool)
+    result = loop_module._dispatch_tool(
+        "propose_action",
+        {
+            "action": "confirm_order",
+            "order_id": 5,
+            "rationale": "looks right",
+            "database_url": "postgresql+psycopg2://attacker/elsewhere",
+            "returns_csv": "/tmp/mine.csv",
+        },
+    )
+
+    assert result == {"allowed": True, "reason": "stub"}
+    assert captured == {"action": "confirm_order", "order_id": 5, "rationale": "looks right"}
+
+
+def test_undeclared_input_is_stripped_through_the_loop(monkeypatch):
+    # the same strip on the real path, where the input comes off a tool_use block
+    captured = {}
+
+    def _fake_tool(**kwargs):
+        captured.update(kwargs)
+        return {"allowed": True, "reason": "stub"}
+
+    monkeypatch.setitem(loop_module._TOOL_FUNCTIONS, "propose_action", _fake_tool)
+    block = SimpleNamespace(
+        type="tool_use",
+        name="propose_action",
+        id="tu_1",
+        input={
+            "action": "hold_account",
+            "order_id": 5,
+            "rationale": "fraud",
+            "database_url": "postgresql+psycopg2://attacker/elsewhere",
+        },
+    )
+    client = _ScriptedClient(
+        [
+            _response("tool_use", [block]),
+            _response("end_turn", [_text_block("Proposed.")]),
+        ]
+    )
+
+    assert ask("hold order 5", client=client) == "Proposed."
+    assert "database_url" not in captured
+    assert captured == {"action": "hold_account", "order_id": 5, "rationale": "fraud"}
+
+
+def test_read_tools_reject_any_input_the_model_invents(monkeypatch):
+    # the read tools declare no properties, so every key is dropped and the call is func()
+    monkeypatch.setitem(
+        loop_module._TOOL_FUNCTIONS, "get_operations_summary", lambda: {"orders_in": 200}
+    )
+    result = loop_module._dispatch_tool(
+        "get_operations_summary", {"database_url": "postgresql+psycopg2://attacker/elsewhere"}
+    )
+    assert result == {"orders_in": 200}
+
+
+def test_a_call_missing_a_required_argument_returns_an_error_dict():
+    # the real propose_action, called without its rationale: Python rejects the call
+    # before any database work, and the dispatcher hands the model a readable result
+    result = loop_module._dispatch_tool(
+        "propose_action", {"action": "confirm_order", "order_id": 5}
+    )
+
+    assert "error" in result
+    assert "propose_action" in result["error"]
+    assert "rationale" in result["error"]
+
+
+def test_a_bad_tool_call_does_not_end_the_turn():
+    # the same path through the loop: the model gets the error back as a tool_result and
+    # can answer, instead of the turn dying on a TypeError
+    block = SimpleNamespace(
+        type="tool_use",
+        name="propose_action",
+        id="tu_1",
+        input={"action": "confirm_order", "order_id": 5},
+    )
+    client = _ScriptedClient(
+        [
+            _response("tool_use", [block]),
+            _response("end_turn", [_text_block("I need a rationale for that.")]),
+        ]
+    )
+
+    assert ask("confirm order 5", client=client) == "I need a rationale for that."
+    tool_result = client.calls[1]["messages"][2]["content"][0]
+    assert "invalid arguments" in tool_result["content"]
+
+
+def test_a_type_error_inside_a_tool_is_not_swallowed(monkeypatch):
+    # only a signature mismatch becomes an error dict: a bug inside a tool must stay a
+    # crash, not come back to the model dressed up as a bad call
+    def _buggy_tool():
+        raise TypeError("'>' not supported between instances of 'NoneType' and 'int'")
+
+    monkeypatch.setitem(loop_module._TOOL_FUNCTIONS, "get_operations_summary", _buggy_tool)
+
+    with pytest.raises(TypeError, match="NoneType"):
+        loop_module._dispatch_tool("get_operations_summary", {})

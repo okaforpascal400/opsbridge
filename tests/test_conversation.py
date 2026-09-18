@@ -120,7 +120,7 @@ def test_turn_count_tracks_questions():
 
 
 def test_tool_turns_are_kept_in_history(monkeypatch):
-    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name: {"flagged": 1})
+    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name, _input: {"flagged": 1})
     tool_use = _tool_use_block("get_flagged_returns", "tu_1")
     client = _ScriptedClient(
         [
@@ -146,7 +146,7 @@ def test_tool_turns_are_kept_in_history(monkeypatch):
 
 
 def test_failed_tool_leaves_history_unchanged(monkeypatch):
-    def _database_down(_name: str) -> Any:
+    def _database_down(_name: str, _input: dict) -> Any:
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(loop_module, "_dispatch_tool", _database_down)
@@ -219,7 +219,7 @@ def test_empty_answer_is_returned_but_not_recorded():
 def test_iteration_limit_notice_is_returned_but_not_recorded(monkeypatch):
     # the notice comes from the loop, not the model, so it must not enter the history
     # as an assistant message, and the unfinished tool turns are dropped with it
-    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name: {"ok": True})
+    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name, _input: {"ok": True})
     runaway = [
         _response("tool_use", [_tool_use_block("get_operations_summary", f"tu_{i}")])
         for i in range(loop_module._MAX_ITERATIONS)

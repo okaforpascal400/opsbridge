@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from schema_adapter.models import MatchConfidence
 from schema_adapter.pipeline import run_pipeline
 
@@ -121,3 +123,49 @@ def get_quarantined_rows(
         }
         for r in result.rejected
     ]
+
+
+def propose_action(
+    action: str,
+    order_id: int,
+    rationale: str,
+    supporting_return_row: int | None = None,
+    database_url: str | None = None,
+    returns_csv: Path | None = None,
+) -> dict:
+    """
+    Propose a write action for human confirmation. Validates but NEVER commits.
+
+    The agent may propose confirm_order, hold_account, or issue_refund_note. This runs the
+    full guardrail policy against the current reconciliation state and returns the verdict
+    (allowed or not, with a reason). It writes nothing: an allowed proposal still requires a
+    separate human confirm step to commit, and this tool has no path to that step.
+
+    action must be one of: confirm_order, hold_account, issue_refund_note.
+    supporting_return_row is required for issue_refund_note.
+    """
+    from guardrails.actions import propose
+    from guardrails.models import ActionProposal, ActionType
+
+    try:
+        action_type = ActionType(action)
+    except ValueError:
+        return {
+            "allowed": False,
+            "reason": (
+                f"Unknown action '{action}'. Must be one of: confirm_order, "
+                "hold_account, issue_refund_note."
+            ),
+        }
+    try:
+        proposal = ActionProposal(
+            action=action_type,
+            order_id=order_id,
+            rationale=rationale,
+            supporting_return_row=supporting_return_row,
+        )
+    except ValidationError as exc:
+        return {"allowed": False, "reason": f"Invalid proposal: {exc}"}
+    _summary, result, matches = run_pipeline(database_url, returns_csv)
+    verdict = propose(proposal, result.orders, result.returns, matches=matches)
+    return {"allowed": verdict.allowed, "reason": verdict.reason}
