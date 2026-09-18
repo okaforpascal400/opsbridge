@@ -26,12 +26,14 @@ from schema_adapter.models import (
 )
 
 
-def _order(order_id: int) -> CanonicalOrder:
+def _order(order_id: int, status: OrderStatus = OrderStatus.PENDING) -> CanonicalOrder:
+    # pending by default: only an open order can be confirmed, so the shared ORDERS
+    # fixture has to be confirmable for the non-status tests to mean anything
     return CanonicalOrder(
         order_id=order_id,
         customer_name="Amaka Balogun",
         order_date=date(2026, 6, 15),
-        status=OrderStatus.CONFIRMED,
+        status=status,
         phone="+2348031234567",
         amount=Decimal("162500"),
     )
@@ -94,6 +96,57 @@ def test_confirm_missing_order_is_rejected():
 def test_confirm_existing_order_is_allowed():
     p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="x")
     result = validate_proposal(p, ORDERS)
+    assert result.allowed is True
+
+
+# --- confirm: only an order that is still open ---------------------------------------
+
+
+def test_confirm_pending_order_is_allowed():
+    orders = [_order(1, OrderStatus.PENDING)]
+    p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="x")
+    result = validate_proposal(p, orders)
+    assert result.allowed is True
+
+
+def test_confirm_unknown_status_order_is_allowed():
+    # an unreadable source status is not evidence the order moved on, so it stays open
+    orders = [_order(1, OrderStatus.UNKNOWN)]
+    p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="x")
+    result = validate_proposal(p, orders)
+    assert result.allowed is True
+
+
+def test_confirm_delivered_order_is_rejected():
+    orders = [_order(1, OrderStatus.DELIVERED)]
+    p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="x")
+    result = validate_proposal(p, orders)
+    assert result.allowed is False
+    assert "has status delivered" in result.reason
+
+
+def test_confirm_returned_order_is_rejected():
+    orders = [_order(1, OrderStatus.RETURNED)]
+    p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="x")
+    result = validate_proposal(p, orders)
+    assert result.allowed is False
+    assert "has status returned" in result.reason
+
+
+def test_confirm_already_confirmed_order_is_rejected():
+    orders = [_order(1, OrderStatus.CONFIRMED)]
+    p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="x")
+    result = validate_proposal(p, orders)
+    assert result.allowed is False
+    assert "has status confirmed" in result.reason
+
+
+@pytest.mark.parametrize("status", [OrderStatus.DELIVERED, OrderStatus.RETURNED])
+def test_terminal_status_does_not_block_hold(status):
+    # the rule belongs to confirm_order alone; a terminal order can still be held
+    orders = [_order(1, status)]
+    p = ActionProposal(action=ActionType.HOLD_ACCOUNT, order_id=1, rationale="chargeback")
+    result = validate_proposal(p, orders)
     assert result.allowed is True
 
 
@@ -266,3 +319,20 @@ def test_missing_order_is_checked_before_action_specifics():
     result = validate_proposal(p, ORDERS, matches=matches)
     assert result.allowed is False
     assert "does not exist" in result.reason
+
+
+@pytest.mark.parametrize("status", [OrderStatus.DELIVERED, OrderStatus.RETURNED])
+def test_terminal_status_does_not_block_refund(status):
+    # the status rule is confirm-only by design: a delivered or returned order is exactly
+    # the kind you refund, so a terminal status must NOT block a valid refund note
+    orders = [_order(1, status)]
+    returns = [_return(return_row=3, amount="54550")]
+    matches = [_match(return_row=3, order_id=1, confidence=MatchConfidence.HIGH)]
+    p = ActionProposal(
+        action=ActionType.ISSUE_REFUND_NOTE,
+        order_id=1,
+        rationale="delivered order, valid return, refund stands",
+        supporting_return_row=3,
+    )
+    result = validate_proposal(p, orders, returns, matches=matches)
+    assert result.allowed is True

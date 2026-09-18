@@ -14,7 +14,11 @@ The rules (DECISION 004's actions, ROADMAP policy):
                       string, which counts whitespace, so the gate is what enforces
                       "requires a reason": it is what a human reviews before confirming
                       and what the audit row records as the why.
-- confirm_order:      the order must exist in the canonical orders.
+- confirm_order:      the order must exist in the canonical orders, and its status must
+                      still be open (PENDING or UNKNOWN). A CONFIRMED, DELIVERED or
+                      RETURNED order has already moved past confirmation, so confirming
+                      it again would record an action that says nothing true about the
+                      order.
 - issue_refund_note:  a supporting return must exist AND have matched THIS order at HIGH
                       confidence. A LOW-confidence match is exactly the case the matcher
                       flagged as uncertain, so refunding on it would turn unresolved
@@ -35,8 +39,12 @@ from schema_adapter.models import (
     CanonicalOrder,
     CanonicalReturn,
     MatchConfidence,
+    OrderStatus,
     ReturnMatch,
 )
+
+# the statuses a confirmation can still act on; the rest have moved past it
+_CONFIRMABLE_STATUSES = (OrderStatus.PENDING, OrderStatus.UNKNOWN)
 
 
 class PolicyResult(BaseModel):
@@ -101,6 +109,15 @@ def validate_proposal(
         )
 
     if proposal.action == ActionType.CONFIRM_ORDER:
+        order = _find_order(proposal.order_id, orders)
+        if order is not None and order.status not in _CONFIRMABLE_STATUSES:
+            return PolicyResult(
+                allowed=False,
+                reason=(
+                    f"Order {proposal.order_id} has status {order.status} and cannot be "
+                    "confirmed; only pending or unknown orders can be confirmed."
+                ),
+            )
         return PolicyResult(
             allowed=True, reason=f"Order {proposal.order_id} exists and may be confirmed."
         )
