@@ -64,3 +64,11 @@ jobs:
         env:
           DATABASE_URL: postgresql+psycopg2://opsbridge:opsbridge@localhost:5432/opsbridge
         run: python -m evals.run
+
+      # The results table in README.md is generated, so it can go stale the moment a case
+      # is added or a score changes. This fails the build on that drift and prints the
+      # diff, reusing the seed from the step above.
+      - name: Eval table is current
+        env:
+          DATABASE_URL: postgresql+psycopg2://opsbridge:opsbridge@localhost:5432/opsbridge
+        run: python -m evals.run --check

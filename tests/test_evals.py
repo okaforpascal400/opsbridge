@@ -15,7 +15,14 @@ import os
 import pytest
 
 from evals.golden import GOLDEN_CASES, EvalCategory
-from evals.run import format_report, run_evals
+from evals.run import (
+    README_TABLE_END,
+    README_TABLE_START,
+    format_report,
+    readme_drift,
+    run_evals,
+    write_readme,
+)
 
 TEST_DATABASE_URL_ENV = "OPSBRIDGE_TEST_DATABASE_URL"
 
@@ -75,3 +82,56 @@ def seeded_db() -> str:
     url = _require_test_database_url()
     seed(database_url=url)
     return url
+
+
+def test_check_passes_on_a_readme_written_by_write_readme(seeded_db, tmp_path):
+    # the README table is generated, so writing it and then checking it must agree: that
+    # round trip is what lets CI treat a stale table as a build failure
+    url = seeded_db
+    results = run_evals(url)
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        f"# Fixture\n\nintro\n\n{README_TABLE_START}\nstale content\n{README_TABLE_END}\n\ntail\n",
+        encoding="utf-8",
+    )
+
+    write_readme(results, readme)
+
+    assert readme_drift(results, readme) == ""
+    written = readme.read_text(encoding="utf-8")
+    assert "stale content" not in written
+    assert written.startswith("# Fixture")
+    assert written.endswith("tail\n")
+    assert "| pipe-orders-in | pipeline | pass |" in written
+
+
+def test_check_reports_drift_when_the_table_is_stale(seeded_db, tmp_path):
+    # the failure mode the CI step exists to catch, with a diff naming what changed
+    url = seeded_db
+    results = run_evals(url)
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        f"{README_TABLE_START}\n**14/15 passing.** yesterday's numbers\n{README_TABLE_END}\n",
+        encoding="utf-8",
+    )
+
+    drift = readme_drift(results, readme)
+
+    assert drift
+    assert "14/15" in drift
+    assert "15/15" in drift
+
+
+def test_a_readme_without_markers_fails_loudly(seeded_db, tmp_path):
+    # a README that lost its markers must not silently skip the check
+    url = seeded_db
+    readme = tmp_path / "README.md"
+    readme.write_text("# Fixture\n\nno markers here\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="markers"):
+        readme_drift(run_evals(url), readme)
+
+
+def test_the_committed_readme_matches_the_current_results(seeded_db):
+    # the same assertion the CI --check step makes, so a stale table fails here too
+    assert readme_drift(run_evals(seeded_db)) == ""
