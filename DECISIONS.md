@@ -426,3 +426,31 @@ supersedes 027's Status line: the table and its write path landed ahead of it. L
 test_actions.py, including test_confirming_a_rejected_proposal_writes_nothing,
 test_confirm_revalidates_against_state_that_drifted_since_propose, and
 test_propose_never_writes_even_when_allowed.
+
+### 031: /confirm HTTP endpoint reuses the audited confirm path (2026-09-18)
+Decision: api/main.py adds POST /confirm, the HTTP surface for a human to confirm a
+proposed action. The route validates the request body with a pydantic model that forbids
+unknown fields and caps the rationale (a malformed body is a 422), builds an
+ActionProposal, and calls the same guardrails.actions.confirm() used everywhere else. The
+server fetches confirm-time reconciliation state itself and validates against it; the
+client sends only the proposal. A policy-refused proposal returns 200 with allowed=false,
+and only an allowed one writes one audit row.
+Alternatives: A new endpoint-specific write path; trusting proposal state sent by the
+client; returning an error status for a policy refusal.
+Why: Reusing confirm() means the HTTP path has no write path of its own, so every guardrail
+(re-validation, the refund rules, append-only audit) applies to HTTP callers without being
+re-implemented or able to drift. The server reading its own confirm-time state honors
+DECISION 028: a client cannot smuggle a stale or forged snapshot to slip a proposal past
+the policy. A refusal is a valid business outcome, not a server error, so it is a 200 with
+allowed=false, while a malformed request is a 422 caught at the boundary.
+Scope, deliberately left open. The endpoint has no authentication: anything that can reach
+the port can confirm, so the "human" in human-in-the-loop is whoever holds network access
+until an auth layer lands. It records no operator identity, which supersedes DECISION 030's
+expectation that confirmed_by and trace_id would arrive with the endpoint; they move to
+Phase 5 with the trace store. It is not idempotent either: the same body posted twice
+writes two audit rows, and the confirm_order status rule cannot prevent that, because
+DECISION 027 forbids mutating legacy.orders, so a confirmation never changes the status the
+rule reads. An infrastructure failure (database unreachable, returns export missing) is
+currently an unlogged 500, which Phase 5 turns into a logged failure with a trace id.
+Locked by test_confirm_endpoint.py, including test_refused_confirm_writes_nothing and
+test_valid_confirm_writes_one_row, which both drive the real route.
