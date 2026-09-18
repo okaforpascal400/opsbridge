@@ -6,6 +6,8 @@ psycopg2-binary==2.9.12
 pydantic==2.13.5
 pydantic-settings==2.15.0
 rapidfuzz==3.14.6
+anthropic==1.4.0
+mcp==1.30.0
 
 # Test and lint
 pytest==9.1.1
