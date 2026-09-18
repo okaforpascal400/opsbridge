@@ -8,16 +8,22 @@ accumulates across turns, that a later turn sees the earlier exchanges (tool cal
 included), that each ask returns the assistant's final text, and that a failed or empty
 turn leaves the history untouched. The tool wiring itself is covered in test_loop.py;
 here the focus is on state carried between turns.
+
+These pass persist_traces=False so a stubbed turn never reaches a database; the
+trace that a real turn saves is covered by the gated test at the end of this file.
 """
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlalchemy import create_engine
 
 import agent.loop as loop_module
 from agent.conversation import Conversation
+from observability.trace import load_trace
 
 
 def _text_block(text: str) -> SimpleNamespace:
@@ -59,7 +65,7 @@ def _sent_contents(call: dict[str, Any]) -> list[Any]:
 
 def test_single_turn_returns_the_answer():
     client = _ScriptedClient([_response("end_turn", [_text_block("First answer.")])])
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     assert convo.ask("first question") == "First answer."
 
 
@@ -70,7 +76,7 @@ def test_history_accumulates_across_turns():
             _response("end_turn", [_text_block("Second answer.")]),
         ]
     )
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     convo.ask("first question")
     convo.ask("second question")
 
@@ -91,7 +97,7 @@ def test_second_turn_sees_the_first_exchange():
             _response("end_turn", [_text_block("Second answer.")]),
         ]
     )
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     convo.ask("first question")
     convo.ask("second question")
 
@@ -111,7 +117,7 @@ def test_turn_count_tracks_questions():
             _response("end_turn", [_text_block("B.")]),
         ]
     )
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     assert convo.turn_count == 0
     convo.ask("one")
     assert convo.turn_count == 1
@@ -129,7 +135,7 @@ def test_tool_turns_are_kept_in_history(monkeypatch):
             _response("end_turn", [_text_block("Its name did not match.")]),
         ]
     )
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     convo.ask("what needs review?")
     convo.ask("why?")
 
@@ -157,7 +163,7 @@ def test_failed_tool_leaves_history_unchanged(monkeypatch):
             _response("end_turn", [_text_block("Recovered.")]),
         ]
     )
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     convo.ask("first question")
     before = convo.history
 
@@ -179,7 +185,7 @@ def test_failed_model_call_leaves_history_unchanged():
             _response("end_turn", [_text_block("Recovered.")]),
         ]
     )
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     convo.ask("first question")
     before = convo.history
 
@@ -202,7 +208,7 @@ def test_empty_answer_is_returned_but_not_recorded():
             _response("end_turn", [_text_block("Third answer.")]),
         ]
     )
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     convo.ask("first question")
     before = convo.history
 
@@ -231,7 +237,7 @@ def test_iteration_limit_notice_is_returned_but_not_recorded(monkeypatch):
             _response("end_turn", [_text_block("Done.")]),
         ]
     )
-    convo = Conversation(client=client)
+    convo = Conversation(client=client, persist_traces=False)
     convo.ask("first question")
     before = convo.history
 
@@ -244,3 +250,108 @@ def test_iteration_limit_notice_is_returned_but_not_recorded(monkeypatch):
         "First answer.",
         "next question",
     ]
+
+
+# --- the traced turn, persisted (gated on a throwaway database) ----------------------
+
+
+def _test_engine():
+    url = os.environ.get("OPSBRIDGE_TEST_DATABASE_URL", "").strip()
+    if not url:
+        pytest.skip("OPSBRIDGE_TEST_DATABASE_URL is not set; skipping trace persistence test.")
+    return create_engine(url)
+
+
+def test_a_turn_saves_a_trace_that_reads_back(monkeypatch):
+    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name, _input: {"flagged": 1})
+    engine = _test_engine()
+    client = _ScriptedClient(
+        [
+            _response("tool_use", [_tool_use_block("get_flagged_returns", "tu_1")]),
+            _response("end_turn", [_text_block("One return needs review.")]),
+        ]
+    )
+    convo = Conversation(client=client, engine=engine)
+
+    answer = convo.ask("what needs review?")
+
+    assert answer == "One return needs review."
+    assert convo.last_trace_id is not None
+    saved = load_trace(convo.last_trace_id, engine)
+    assert saved is not None
+    assert saved["question"] == "what needs review?"
+    assert saved["final_answer"] == "One return needs review."
+    assert [step["kind"] for step in saved["steps"]] == [
+        "model_call",
+        "tool_call",
+        "model_call",
+    ]
+    assert saved["total_ms"] >= 0
+    engine.dispose()
+
+
+def test_a_failed_turn_is_still_traced():
+    # an empty answer is not recorded in history, but it is exactly the turn worth reading
+    # back, so the trace is saved anyway
+    engine = _test_engine()
+    client = _ScriptedClient([_response("end_turn", [])])
+    convo = Conversation(client=client, engine=engine)
+
+    assert convo.ask("a question with no answer") == ""
+    assert convo.history == []
+
+    saved = load_trace(convo.last_trace_id, engine)
+    assert saved is not None
+    assert saved["question"] == "a question with no answer"
+    assert saved["final_answer"] == ""
+    engine.dispose()
+
+
+def test_persistence_off_means_no_database_and_still_a_trace_id():
+    # what the stubbed tests rely on: a trace id is still assigned, nothing is written
+    client = _ScriptedClient([_response("end_turn", [_text_block("Fine.")])])
+    convo = Conversation(client=client, persist_traces=False)
+
+    assert convo.ask("status?") == "Fine."
+    assert convo.last_trace_id is not None
+
+
+def test_a_raising_turn_still_persists_its_trace(monkeypatch):
+    # a crash is the turn most worth reading back, so the trace is saved on the way out
+    def _database_down(_name: str, _input: dict) -> Any:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(loop_module, "_dispatch_tool", _database_down)
+    engine = _test_engine()
+    client = _ScriptedClient(
+        [_response("tool_use", [_tool_use_block("get_operations_summary", "tu_1")])]
+    )
+    convo = Conversation(client=client, engine=engine)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        convo.ask("how many orders?")
+
+    assert convo.history == []
+    saved = load_trace(convo.last_trace_id, engine)
+    assert saved is not None
+    assert saved["question"] == "how many orders?"
+    assert saved["final_answer"] == ""
+    failing_step = saved["steps"][-1]
+    assert failing_step["kind"] == "tool_call"
+    assert failing_step["error"] == "database unavailable"
+    engine.dispose()
+
+
+def test_a_save_failure_does_not_break_the_turn(monkeypatch):
+    # losing a trace is acceptable; losing an answer the agent already produced is not
+    def _save_explodes(_trace, _engine):
+        raise RuntimeError("traces table is gone")
+
+    monkeypatch.setattr("agent.conversation.save_trace", _save_explodes)
+    client = _ScriptedClient([_response("end_turn", [_text_block("Still answered.")])])
+    # a stand-in engine: the stubbed save never reaches a database
+    convo = Conversation(client=client, engine=object())
+
+    assert convo.ask("status?") == "Still answered."
+    assert convo.history[-1]["content"] == "Still answered."
+    assert convo.last_trace_id is not None

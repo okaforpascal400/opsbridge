@@ -477,3 +477,25 @@ without being hidden. The failure handler catches Exception broadly, a documente
 to the catch-specific rule, because any failure deserves a trace step and narrowing it would
 drop the ones you most need. Locked by test_loop.py, including
 test_a_raising_tool_is_recorded_and_still_raises and the same-answer-with-and-without-trace test.
+
+### 033: Conversation persists a trace per turn, tolerant of both crashes and save failures (2026-09-18)
+Decision: Conversation.ask creates a Trace per turn, passes it to run_turn, times the whole
+turn, and persists it via save_trace. Two failure paths are handled so tracing never
+interferes with the conversation. First, the turn runs in a try and the save runs in a
+finally, so a turn that raises still persists its trace (with the failing step and the time
+it ran before failing), which is the trace most worth inspecting; the exception still
+propagates. Second, save_trace is wrapped so a persistence failure is swallowed: losing a
+trace is acceptable, losing an answer the agent already produced is not. Persistence is on by
+default (right for real use) and the stubbed unit tests opt out, so they never write to a
+database. last_trace_id is set before the turn so the trace of a raising turn is findable.
+Alternatives: Save only on success (loses the crash trace); let a save failure propagate
+(breaks a good turn); resolve an engine unconditionally (silently writes traces from every
+stubbed test into the dev database).
+Why: Observability must observe without interfering. Saving in a finally captures the exact
+turn a developer most needs, the one that failed. Swallowing a save failure keeps tracing
+additive: the user still gets their answer even if Postgres is down. The swallow catches
+Exception broadly (a documented exception to the catch-specific rule, the second after
+DECISION 032) because any persistence failure must be prevented from breaking a good turn;
+it is silent until Phase 5 structured logging gives it somewhere to report. Locked by
+test_conversation.py, including test_a_raising_turn_still_persists_its_trace and
+test_a_save_failure_does_not_break_the_turn.

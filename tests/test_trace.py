@@ -42,10 +42,16 @@ def _require_test_database_url() -> str:
 def engine():
     url = _require_test_database_url()
     eng = create_engine(url)
-    with eng.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {TRACE_SCHEMA}.{TRACE_STEPS_TABLE}"))
-        conn.execute(text(f"DROP TABLE IF EXISTS {TRACE_SCHEMA}.{TRACES_TABLE}"))
     ensure_trace_tables(eng)
+    # empty between tests for deterministic reads, but never drop: trace and audit tables
+    # are created once and only ever grow. Steps first, they reference the traces.
+    with eng.begin() as conn:
+        conn.execute(
+            text(
+                f"TRUNCATE TABLE {TRACE_SCHEMA}.{TRACE_STEPS_TABLE}, "
+                f"{TRACE_SCHEMA}.{TRACES_TABLE} RESTART IDENTITY"
+            )
+        )
     try:
         yield eng
     finally:
