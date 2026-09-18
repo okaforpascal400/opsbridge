@@ -1,6 +1,8 @@
 """OpsBridge HTTP API.
 
-Exposes a health check and the human confirmation endpoint. The confirmation endpoint is
+Exposes a health check, the human confirmation endpoint, and a trace reader. The trace
+reader answers the debugging question: what did the agent do on a given turn, in order,
+with what inputs, outputs, latencies and errors. The confirmation endpoint is
 the HTTP surface of the guardrail write path: a client POSTs a proposed action, the server
 re-validates it against current reconciliation state and, only if the policy allows, writes
 one audit row through confirm(). The endpoint adds no new write path; it reuses the single
@@ -13,15 +15,16 @@ Run it with:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
 from config import get_settings
 from guardrails.actions import confirm
 from guardrails.models import ActionProposal, ActionType
+from observability.trace import load_trace
 from schema_adapter.pipeline import run_pipeline
 
 
@@ -53,6 +56,28 @@ class ConfirmResponse(BaseModel):
 
     allowed: bool
     reason: str
+
+
+class TraceStepResponse(BaseModel):
+    """One step of a recorded turn: a model call or a tool call."""
+
+    kind: str
+    name: str
+    input: Any = None
+    output: Any = None
+    latency_ms: int
+    error: str | None = None
+
+
+class TraceResponse(BaseModel):
+    """The timeline of one recorded turn, oldest step first."""
+
+    trace_id: str
+    question: str
+    final_answer: str
+    total_ms: int
+    created_at: str
+    steps: list[TraceStepResponse]
 
 
 app: FastAPI = FastAPI(title="OpsBridge API")
@@ -117,3 +142,24 @@ def confirm_action(
         supporting_return_row=request.supporting_return_row,
     )
     return _confirm_proposal(proposal, database_url=database_url)
+
+
+@app.get("/trace/{trace_id}", response_model=TraceResponse)
+def read_trace(
+    trace_id: str,
+    database_url: Annotated[str, Depends(get_database_url)],
+) -> TraceResponse:
+    """Return the recorded timeline of one agent turn: why it answered what it answered.
+
+    A plain read. An unknown id is a 404 rather than an empty timeline, because "no such
+    trace" and "a trace with no steps" are different answers to the debugging question.
+    """
+    engine = create_engine(database_url)
+    try:
+        trace = load_trace(trace_id, engine)
+    finally:
+        engine.dispose()
+
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"No trace with id {trace_id}.")
+    return TraceResponse(**trace)
