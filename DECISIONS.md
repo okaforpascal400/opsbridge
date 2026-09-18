@@ -370,3 +370,30 @@ system flagged as uncertain cannot be laundered into a money movement. Locked by
 test_policy.py, including test_refund_on_low_confidence_match_is_rejected,
 test_refund_when_the_cited_return_row_has_no_match_is_rejected and
 test_blank_rationale_is_rejected.
+
+### 029: Confirm status rule, refund amount ceiling, and their deliberate scope (2026-09-18)
+Decision: Two policy rules were added beyond order-existence and the HIGH-confidence match.
+(1) confirm_order is allowed only when the order status is PENDING or UNKNOWN; a CONFIRMED,
+DELIVERED, or RETURNED order is rejected, because confirming an order that has already moved
+past confirmation records an action that says nothing true. (2) A refund note is rejected
+when the cited return's amount exceeds the order amount; equal or less is a full or partial
+refund and is allowed. That ceiling is checked only when the caller passes the returns list
+and the cited row is in it, because returns defaults to empty; the HIGH-confidence match is
+required either way. The scope of the status rule is deliberate and tested: it applies to
+confirm only, so a delivered or returned order can still be refunded or held (you refund
+based on a valid matched return, not fulfillment status); and an UNKNOWN status is
+confirmable, which per DECISION 016 includes both blank and unrecognized source statuses, on
+the grounds that confirm commits nothing on its own and a human reviews the rationale.
+Alternatives: Make confirm status-blind; block refunds and holds on terminal statuses too;
+treat UNKNOWN as non-confirmable.
+Why: These are the checks a reviewer expects on a money and state action. Blocking a
+re-confirm keeps the audit trail honest. Capping the refund at the order amount stops any
+single refund note paying out more than the order was worth. It is a per-note ceiling, not a
+running total: the gate is stateless and holds no record of notes already issued, so two
+returns that both match one order can each pass, and aggregate exposure per order is a
+separate check that lands with the actions table in DECISION 027. Scoping the status rule to
+confirm, and asserting that scope with tests (test_terminal_status_does_not_block_refund,
+test_terminal_status_does_not_block_hold), stops the natural refactor of hoisting that check
+above the action if-chain from silently changing refund or hold policy. The amount ceiling
+has no equivalent scope test yet. Locked by test_policy.py, including
+test_confirm_delivered_order_is_rejected and test_refund_above_the_order_amount_is_rejected.
