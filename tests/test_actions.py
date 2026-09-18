@@ -30,6 +30,7 @@ from guardrails.actions import (
     propose,
 )
 from guardrails.models import ActionProposal, ActionType
+from observability.trace import Trace
 from schema_adapter.models import (
     CanonicalOrder,
     CanonicalReturn,
@@ -202,3 +203,77 @@ def test_multiple_confirmations_accumulate(engine):
     confirm(p1, engine, ORDERS)
     confirm(p2, engine, ORDERS)
     assert count_actions(engine) == 2
+
+
+def test_a_confirmation_records_the_trace_it_came_from(engine):
+    # the correlation: an action proposed by an agent turn names that turn's trace. The id
+    # is a real 32-character uuid hex from the producer, so a truncating write would show
+    trace_id = Trace().trace_id
+    p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="pending order")
+    result = confirm(p, engine, ORDERS, trace_id=trace_id)
+
+    assert result.allowed is True
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(f"SELECT trace_id FROM {ACTIONS_SCHEMA}.{ACTIONS_TABLE}")
+        ).one()
+    assert row.trace_id == trace_id
+
+
+def test_a_confirmation_without_a_trace_stores_null(engine):
+    # a human confirming directly has no agent turn behind it, and the row says so
+    p = ActionProposal(action=ActionType.HOLD_ACCOUNT, order_id=1, rationale="chargeback")
+    result = confirm(p, engine, ORDERS)
+
+    assert result.allowed is True
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(f"SELECT trace_id FROM {ACTIONS_SCHEMA}.{ACTIONS_TABLE}")
+        ).one()
+    assert row.trace_id is None
+
+
+def test_an_older_table_repairs_itself(engine):
+    # CREATE TABLE IF NOT EXISTS leaves an existing table alone, so a database seeded
+    # before trace_id existed would never gain the column and every insert would fail
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"ALTER TABLE {ACTIONS_SCHEMA}.{ACTIONS_TABLE} DROP COLUMN trace_id")
+        )
+        conn.execute(
+            text(
+                f"INSERT INTO {ACTIONS_SCHEMA}.{ACTIONS_TABLE} "
+                "(action, order_id, rationale) VALUES ('confirm_order', 1, 'from before')"
+            )
+        )
+
+    ensure_actions_table(engine)
+    ensure_actions_table(engine)  # idempotent: running it again is a no-op
+
+    with engine.begin() as conn:
+        columns = [
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns WHERE "
+                    f"table_schema = '{ACTIONS_SCHEMA}' AND table_name = '{ACTIONS_TABLE}'"
+                )
+            )
+        ]
+    assert "trace_id" in columns
+
+    # the row written before the repair survives, with no trace, and writes work again
+    trace_id = Trace().trace_id
+    p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="after repair")
+    assert confirm(p, engine, ORDERS, trace_id=trace_id).allowed is True
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                f"SELECT rationale, trace_id FROM {ACTIONS_SCHEMA}.{ACTIONS_TABLE} "
+                "ORDER BY action_id"
+            )
+        ).all()
+    assert [(r.rationale, r.trace_id) for r in rows] == [
+        ("from before", None),
+        ("after repair", trace_id),
+    ]

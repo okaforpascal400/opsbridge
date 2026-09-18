@@ -32,6 +32,7 @@ from guardrails.actions import (
 )
 from guardrails.models import ActionProposal, ActionType
 from legacy.seed_db import seed
+from observability.trace import Trace
 from schema_adapter.models import MatchConfidence, OrderStatus
 from schema_adapter.pipeline import run_pipeline
 
@@ -225,3 +226,62 @@ def test_the_helper_matches_the_route(seeded_api):
     result = _confirm_proposal(proposal, database_url=url)
     assert isinstance(result, ConfirmResponse)
     assert result.allowed is True
+
+
+def test_a_posted_trace_id_is_recorded_on_the_audit_row(seeded_api):
+    # a confirmation that names the turn it came from can be traced back to it
+    url, eng = seeded_api
+    order_id = _pending_order_id(url)
+    trace_id = Trace().trace_id  # a real uuid hex, not a short literal a truncation survives
+
+    response = client.post(
+        "/confirm",
+        json={
+            "action": "confirm_order",
+            "order_id": order_id,
+            "rationale": "confirming what the agent proposed",
+            "trace_id": trace_id,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["allowed"] is True
+    with eng.begin() as conn:
+        row = conn.execute(
+            text(f"SELECT trace_id FROM {ACTIONS_SCHEMA}.{ACTIONS_TABLE}")
+        ).one()
+    assert row.trace_id == trace_id
+
+
+def test_a_confirmation_without_a_trace_id_stores_null(seeded_api):
+    url, eng = seeded_api
+    order_id = _pending_order_id(url)
+
+    client.post(
+        "/confirm",
+        json={
+            "action": "confirm_order",
+            "order_id": order_id,
+            "rationale": "confirmed by hand",
+        },
+    )
+
+    with eng.begin() as conn:
+        row = conn.execute(
+            text(f"SELECT trace_id FROM {ACTIONS_SCHEMA}.{ACTIONS_TABLE}")
+        ).one()
+    assert row.trace_id is None
+
+
+def test_an_oversized_trace_id_is_rejected_with_422():
+    # the id lands in an append-only table, so it is capped like the rationale is
+    r = client.post(
+        "/confirm",
+        json={
+            "action": "confirm_order",
+            "order_id": 1,
+            "rationale": "x",
+            "trace_id": "t" * 65,
+        },
+    )
+    assert r.status_code == 422

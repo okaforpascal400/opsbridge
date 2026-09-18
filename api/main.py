@@ -49,6 +49,11 @@ class ConfirmRequest(BaseModel):
     order_id: int = Field(gt=0)
     rationale: str = Field(min_length=1, max_length=2000)
     supporting_return_row: int | None = Field(default=None, ge=0)
+    trace_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="the agent turn this confirmation came from, if there was one",
+    )
 
 
 class ConfirmResponse(BaseModel):
@@ -102,6 +107,7 @@ def _confirm_proposal(
     proposal: ActionProposal,
     database_url: str | None = None,
     returns_csv: Path | None = None,
+    trace_id: str | None = None,
 ) -> ConfirmResponse:
     """Re-validate against current state and write through the audited confirm() path.
 
@@ -116,7 +122,12 @@ def _confirm_proposal(
     engine = create_engine(url)
     try:
         verdict = confirm(
-            proposal, engine, result.orders, result.returns, matches=matches
+            proposal,
+            engine,
+            result.orders,
+            result.returns,
+            matches=matches,
+            trace_id=trace_id,
         )
     finally:
         engine.dispose()
@@ -141,7 +152,9 @@ def confirm_action(
         rationale=request.rationale,
         supporting_return_row=request.supporting_return_row,
     )
-    return _confirm_proposal(proposal, database_url=database_url)
+    return _confirm_proposal(
+        proposal, database_url=database_url, trace_id=request.trace_id
+    )
 
 
 @app.get("/trace/{trace_id}", response_model=TraceResponse)
