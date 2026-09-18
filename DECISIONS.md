@@ -523,3 +523,31 @@ left open: attribution is caller-asserted (any client can stamp any id) and noth
 tests supplies a trace_id yet, both bounded by the same missing authentication layer as the
 deferred confirmed_by field. Locked by test_actions.py including
 test_an_older_table_repairs_itself.
+
+### 035: Two eval tiers, a deterministic gate in CI and a live agent run on demand (2026-09-18)
+Decision: Evals are split in two. evals/run.py scores the pipeline, the matcher and the
+guardrail policy against golden expectations with no model in the loop, exits non-zero on
+any failed case, and runs in CI on every push and pull request after lint and the tests, with
+an explicit seed step before it. evals/live.py runs real questions through the agent against
+the Anthropic API and is run by hand, never in CI. Golden expectations are read from the real
+seed and from the rules already recorded in DECISIONS 028, 029 and 030, not guessed. Scoring
+is exact comparison in the deterministic tier and structured substring checks in the live
+tier; an LLM judge is named as the escalation for open-ended answers and deliberately unused.
+Alternatives: One suite that always calls the model (honest but too slow, costly and flaky
+to gate commits); no CI gate, running evals by hand (a regression lands and nobody notices);
+an LLM judge for every case (cost and non-determinism to score verifiable facts); letting the
+tests leave the database seeded rather than seeding explicitly (makes the evals depend on
+pytest collection order).
+Why: A regression guard has to be cheap enough to run on every commit, and the deterministic
+tier is: it calls no model, so it is free, fast and gives the same score every time. The live
+tier is the only thing that proves the model picks the right tools and composes a correct
+answer, which is worth measuring but cannot gate a build that must pass without an API key.
+Reading expectations from the real seed is what makes a red eval meaningful: every value is
+either a fact about the seeded data or a rule in the decision log, so a failure means
+behaviour changed rather than an opinion being violated. Structured checks beat a judge for
+answers that contain a checkable fact, because a number is either present or it is not; a
+judge earns its cost only when many wordings are correct, and adopting one deserves its own
+entry and rubric. The gate is demonstrated, not assumed: flipping the refund amount
+comparison from > to < took the suite to 13/15 and exited non-zero, naming both sides of the
+break (policy-refund-over-amount-refused went from refuse to allow, and
+policy-refund-high-match-allowed from allow to refuse); reverting restored 15/15.
