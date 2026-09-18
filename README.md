@@ -8,11 +8,34 @@ table, a spreadsheet export, PDFs and an undocumented partner API. It answers
 natural-language operations questions across all of them and proposes write-actions
 that a human confirms before anything commits.
 
-What runs today is Phase 1: the foundation and the deliberately messy legacy world the
-agent will later have to tame. There is a health endpoint, a seeded legacy database, a
-returns export and a fake partner API. The agent itself, the schema adapter behind it,
-the guardrails and the evals land in later phases, so nothing here answers a question
-yet. See ROADMAP.md for the phase plan.
+Phases 1 to 5 are built: the messy legacy world, the schema adapter that reconciles it, a
+read-only tool-calling agent with an MCP server, the guardrail write path behind a human
+confirmation, and tracing with an eval suite over all of it. Guardrail hardening continues
+and the packaging work is Phase 7. See ROADMAP.md for the phase status.
+
+## Evals
+
+The system is measured, not just run. Two tiers:
+
+| Suite | Cases | What it proves | When it runs |
+| --- | --- | --- | --- |
+| `evals/run.py`, deterministic | 15 | pipeline counts, matcher tiers, guardrail policy | CI, every push and pull request |
+| `evals/live.py`, live agent | 4 | the agent picks the right tools and answers correctly against real Claude | on demand, needs an API key |
+
+The deterministic suite passes 15/15 today: 4 pipeline counts, 3 matcher tiers, and 8 policy
+cases covering confirm-by-status and the refund safety rules. It calls no model, so it is
+free and reproducible, and it exits non-zero on a failed case, which fails the build.
+
+It has already caught a regression. Flipping one comparison in the refund policy, `>` to
+`<`, broke two cases at once: a refund larger than its order was allowed, and a legitimate
+partial refund was refused. The suite went to 13/15 and named both.
+
+```
+python -m evals.run
+```
+
+The methodology, the scoring approach and the full write-up of that failure are in
+[evals/README.md](evals/README.md).
 
 ## The seeded mess
 
@@ -58,7 +81,10 @@ up with the free-text statuses in the orders table. An unknown phone number gets
 that lets a naive client store a delivery state that means nothing.
 
 None of this is an oversight, and a reviewer should not tidy it up. It is the seam the
-schema adapter has to close in Phase 2, and the seed tests fail if the mess goes away.
+schema adapter closes: `schema_adapter/` reconciles the orders table and the returns export
+into one canonical model. The partner API's quirks are not handled yet, since the tool that
+reads it is deferred with the RAG work, so that part of the mess is still waiting. The seed
+tests fail if the mess goes away.
 
 ## Running it locally
 
@@ -200,7 +226,7 @@ ruff check .
 
 ```
 opsbridge/
-  api/                 FastAPI app. Phase 1: /health only
+  api/                 FastAPI app: /health, POST /confirm, GET /trace/{id}
   legacy/              the seeded mess: row generator, DB seed, partner API
   schema_adapter/      canonical models, normalizers, return-to-order matcher, pipeline
   agent/               read tools, tool schemas, tool-calling loop, and the Conversation
