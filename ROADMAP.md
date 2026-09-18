@@ -62,12 +62,13 @@ seed item, still open) and a vector store. The partner-API tool is deferred with
 ## Phase 4: Guardrails and human-in-the-loop. Hats: 2, 3 (safety/security)
 Make "trusted to act" real. The agent proposes; the human confirms.
 
-- [ ] Three proposal types: confirm_order, hold_account, issue_refund_note
-- [ ] Structured proposal object with rationale plus affected records
-- [ ] Policy checks (for example refund note requires a matched return; hold requires a reason)
-- [ ] Confirmation endpoint, only a confirmed proposal commits the write
-- [ ] Tests: no write path exists that bypasses confirmation
-- [ ] DECISIONS.md entry for the safety model
+- [x] Three proposal types: confirm_order, hold_account, issue_refund_note
+- [x] Structured proposal object with rationale plus affected records
+- [x] Policy checks (for example refund note requires a matched return; hold requires a reason)
+- [~] Confirmation endpoint, only a confirmed proposal commits the write (confirm() is the
+  write path and is tested; the HTTP endpoint is not built)
+- [x] Tests: no write path exists that bypasses confirmation
+- [x] DECISIONS.md entry for the safety model
 
 ## Phase 5: Observability. Hats: 3 (observability)
 See why the agent did what it did. The debugging story Ed calls "so important".
