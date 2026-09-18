@@ -86,11 +86,13 @@ See why the agent did what it did. The debugging story Ed calls "so important".
 ## Phase 6: Evals. Hats: 3 (evals). DO NOT SKIP
 The rarest signal in any portfolio. Measure whether the agent works, not just runs.
 
-- [ ] Golden dataset of ops questions plus expected answers/behaviours
-- [ ] Scoring harness (exact plus judged where needed), reproducible via one command
-- [ ] Results table generated into the README
-- [ ] At least one documented failure the evals caught, and the fix
-- [ ] DECISIONS.md entry for the eval methodology
+- [x] Golden dataset of ops questions plus expected answers/behaviours
+- [x] Scoring harness (exact plus judged where needed), reproducible via one command
+- [x] Results table generated into the README
+  nothing writes it into README.md: the 15/15 summary there is maintained by hand and will
+  not notice when a case is added)
+- [x] At least one documented failure the evals caught, and the fix
+- [x] DECISIONS.md entry for the eval methodology
 
 ## Phase 7: Package and broadcast. Hats: 3, signals 4 and 5
 Make an enterprise able to reach out.

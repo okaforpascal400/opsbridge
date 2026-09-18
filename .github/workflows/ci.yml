@@ -48,3 +48,27 @@ jobs:
           # and recreates the legacy schema.
           OPSBRIDGE_TEST_DATABASE_URL: postgresql+psycopg2://opsbridge:opsbridge@localhost:5432/opsbridge
         run: pytest
+
+      # The golden expectations are counts read from the real seed, so the evals need a
+      # database in a known state. The tests seed as a side effect, but relying on which
+      # test ran last would make the evals depend on collection order, so seed explicitly.
+      - name: Seed the database for the evals
+        env:
+          DATABASE_URL: postgresql+psycopg2://opsbridge:opsbridge@localhost:5432/opsbridge
+        run: python -m legacy.seed_db
+
+      # The deterministic suite only: it calls no model, so it is free and reproducible,
+      # and it exits non-zero on any failed case, which fails the build. evals/live.py is
+      # deliberately not run here; it needs an API key and is non-deterministic.
+      - name: Evals
+        env:
+          DATABASE_URL: postgresql+psycopg2://opsbridge:opsbridge@localhost:5432/opsbridge
+        run: python -m evals.run
+
+      # The results table in README.md is generated, so it can go stale the moment a case
+      # is added or a score changes. This fails the build on that drift and prints the
+      # diff, reusing the seed from the step above.
+      - name: Eval table is current
+        env:
+          DATABASE_URL: postgresql+psycopg2://opsbridge:opsbridge@localhost:5432/opsbridge
+        run: python -m evals.run --check
