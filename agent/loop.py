@@ -28,6 +28,7 @@ from agent.tools import (
     propose_action,
 )
 from config import get_settings
+from observability.trace import Trace, TraceStep, timer
 
 # The tools the agent may call, by name. Each takes no arguments and returns JSON-safe
 # data. This dict is the single source of truth for both the schemas sent to Claude and
@@ -185,7 +186,11 @@ def _dispatch_tool(name: str, tool_input: dict[str, Any]) -> Any:
     return func(**filtered_input)
 
 
-def run_turn(messages: list[dict[str, Any]], client: AnthropicLike | None = None) -> str:
+def run_turn(
+    messages: list[dict[str, Any]],
+    client: AnthropicLike | None = None,
+    trace: Trace | None = None,
+) -> str:
     """
     Run one tool-calling turn against a caller-supplied message list and return the answer.
 
@@ -195,29 +200,81 @@ def run_turn(messages: list[dict[str, Any]], client: AnthropicLike | None = None
     the list appends the returned text itself. Runs until a final text answer or the
     iteration guard, which returns ITERATION_LIMIT_MESSAGE instead. The client is injected
     for testability and defaults to a real one.
+
+    Pass a Trace to record what the turn did: one step per model call and one per tool
+    call, plus the final answer. Tracing only observes. It never changes the control flow
+    or the returned string, and without a trace the loop runs exactly as before. This
+    fills the Trace object and nothing else: persistence belongs to the caller, so the
+    loop opens no database connection of its own.
     """
     active_client = client or _build_real_client()
     model = get_settings().anthropic_model
 
     for _ in range(_MAX_ITERATIONS):
-        response = active_client.messages.create(
-            model=model,
-            max_tokens=1024,
-            system=_SYSTEM_PROMPT,
-            tools=_TOOL_SCHEMAS,
-            messages=messages,
-        )
+        with timer() as model_timer:
+            response = active_client.messages.create(
+                model=model,
+                max_tokens=1024,
+                system=_SYSTEM_PROMPT,
+                tools=_TOOL_SCHEMAS,
+                messages=messages,
+            )
+        if trace is not None:
+            trace.add_step(
+                TraceStep(
+                    kind="model_call",
+                    name=model,
+                    input={"messages": len(messages)},
+                    output={"stop_reason": response.stop_reason},
+                    latency_ms=model_timer.elapsed_ms,
+                )
+            )
 
         if response.stop_reason != "tool_use":
-            return "".join(
+            answer = "".join(
                 block.text for block in response.content if block.type == "text"
             ).strip()
+            if trace is not None:
+                trace.final_answer = answer
+            return answer
 
         messages.append({"role": "assistant", "content": response.content})
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                result = _dispatch_tool(block.name, block.input)
+                try:
+                    with timer() as tool_timer:
+                        result = _dispatch_tool(block.name, block.input)
+                except Exception as exc:
+                    # record the call that failed, then let it fail: the turn that raised
+                    # is the one worth inspecting, and swallowing it would hide a bug
+                    if trace is not None:
+                        trace.add_step(
+                            TraceStep(
+                                kind="tool_call",
+                                name=block.name,
+                                input=dict(block.input),
+                                output=None,
+                                latency_ms=tool_timer.elapsed_ms,
+                                error=str(exc),
+                            )
+                        )
+                    raise
+                if trace is not None:
+                    trace.add_step(
+                        TraceStep(
+                            kind="tool_call",
+                            name=block.name,
+                            input=dict(block.input),
+                            output=result,
+                            latency_ms=tool_timer.elapsed_ms,
+                            error=(
+                                result["error"]
+                                if isinstance(result, dict) and "error" in result
+                                else None
+                            ),
+                        )
+                    )
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -227,6 +284,8 @@ def run_turn(messages: list[dict[str, Any]], client: AnthropicLike | None = None
                 )
         messages.append({"role": "user", "content": tool_results})
 
+    if trace is not None:
+        trace.final_answer = ITERATION_LIMIT_MESSAGE
     return ITERATION_LIMIT_MESSAGE
 
 
