@@ -19,6 +19,7 @@ from guardrails.models import ActionProposal, ActionType
 from guardrails.policy import validate_proposal
 from schema_adapter.models import (
     CanonicalOrder,
+    CanonicalReturn,
     MatchConfidence,
     OrderStatus,
     ReturnMatch,
@@ -46,6 +47,17 @@ def _match(return_row: int, order_id: int, confidence: MatchConfidence) -> Retur
     )
 
 
+def _return(return_row: int, amount: str) -> CanonicalReturn:
+    return CanonicalReturn(
+        return_row=return_row,
+        customer_name="Amaka Balogun",
+        phone="+2348031234567",
+        amount=Decimal(amount),
+        reason="damaged",
+    )
+
+
+# every order is worth 162500, so a return above that is more than the customer paid
 ORDERS = [_order(1), _order(2)]
 
 
@@ -57,7 +69,7 @@ def test_blank_rationale_is_rejected(action):
     # the model's min_length=1 counts whitespace as content, so the gate is what
     # enforces "requires a reason" for every action
     p = ActionProposal(action=action, order_id=1, rationale="   ")
-    result = validate_proposal(p, ORDERS, [])
+    result = validate_proposal(p, ORDERS)
     assert result.allowed is False
     assert "requires a rationale" in result.reason
 
@@ -65,7 +77,7 @@ def test_blank_rationale_is_rejected(action):
 def test_rationale_with_surrounding_whitespace_is_accepted():
     # only blank is rejected; a real reason is not made invalid by stray whitespace
     p = ActionProposal(action=ActionType.HOLD_ACCOUNT, order_id=1, rationale="  fraud  ")
-    result = validate_proposal(p, ORDERS, [])
+    result = validate_proposal(p, ORDERS)
     assert result.allowed is True
 
 
@@ -74,14 +86,14 @@ def test_rationale_with_surrounding_whitespace_is_accepted():
 
 def test_confirm_missing_order_is_rejected():
     p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=999, rationale="x")
-    result = validate_proposal(p, ORDERS, [])
+    result = validate_proposal(p, ORDERS)
     assert result.allowed is False
     assert "does not exist" in result.reason
 
 
 def test_confirm_existing_order_is_allowed():
     p = ActionProposal(action=ActionType.CONFIRM_ORDER, order_id=1, rationale="x")
-    result = validate_proposal(p, ORDERS, [])
+    result = validate_proposal(p, ORDERS)
     assert result.allowed is True
 
 
@@ -90,13 +102,13 @@ def test_confirm_existing_order_is_allowed():
 
 def test_hold_existing_order_is_allowed():
     p = ActionProposal(action=ActionType.HOLD_ACCOUNT, order_id=2, rationale="suspected fraud")
-    result = validate_proposal(p, ORDERS, [])
+    result = validate_proposal(p, ORDERS)
     assert result.allowed is True
 
 
 def test_hold_missing_order_is_rejected():
     p = ActionProposal(action=ActionType.HOLD_ACCOUNT, order_id=999, rationale="x")
-    result = validate_proposal(p, ORDERS, [])
+    result = validate_proposal(p, ORDERS)
     assert result.allowed is False
 
 
@@ -111,7 +123,7 @@ def test_refund_with_high_confidence_match_is_allowed():
         rationale="return 3 matched order 1",
         supporting_return_row=3,
     )
-    result = validate_proposal(p, ORDERS, matches)
+    result = validate_proposal(p, ORDERS, matches=matches)
     assert result.allowed is True
 
 
@@ -121,7 +133,7 @@ def test_refund_without_supporting_return_is_rejected():
         order_id=1,
         rationale="no backing return",
     )
-    result = validate_proposal(p, ORDERS, [])
+    result = validate_proposal(p, ORDERS)
     assert result.allowed is False
     assert "requires a supporting return" in result.reason
 
@@ -135,7 +147,7 @@ def test_refund_on_low_confidence_match_is_rejected():
         rationale="return 3 loosely matched order 1",
         supporting_return_row=3,
     )
-    result = validate_proposal(p, ORDERS, matches)
+    result = validate_proposal(p, ORDERS, matches=matches)
     assert result.allowed is False
     assert "HIGH-confidence" in result.reason
 
@@ -149,7 +161,7 @@ def test_refund_when_match_points_to_a_different_order_is_rejected():
         rationale="mismatched target",
         supporting_return_row=3,
     )
-    result = validate_proposal(p, ORDERS, matches)
+    result = validate_proposal(p, ORDERS, matches=matches)
     assert result.allowed is False
 
 
@@ -163,7 +175,7 @@ def test_refund_when_the_cited_return_row_has_no_match_is_rejected():
         rationale="cites a return row the matcher never tied to this order",
         supporting_return_row=99,
     )
-    result = validate_proposal(p, ORDERS, matches)
+    result = validate_proposal(p, ORDERS, matches=matches)
     assert result.allowed is False
     assert "HIGH-confidence" in result.reason
 
@@ -181,7 +193,7 @@ def test_refund_finds_its_match_anywhere_in_the_run():
         rationale="return 3 matched order 1",
         supporting_return_row=3,
     )
-    result = validate_proposal(p, ORDERS, matches)
+    result = validate_proposal(p, ORDERS, matches=matches)
     assert result.allowed is True
 
 
@@ -195,8 +207,51 @@ def test_refund_on_return_row_zero_is_allowed():
         rationale="return 0 matched order 1",
         supporting_return_row=0,
     )
-    result = validate_proposal(p, ORDERS, matches)
+    result = validate_proposal(p, ORDERS, matches=matches)
     assert result.allowed is True
+
+
+def test_refund_below_the_order_amount_is_allowed():
+    # a partial refund is normal: most seeded returns are worth less than the order
+    matches = [_match(return_row=3, order_id=1, confidence=MatchConfidence.HIGH)]
+    returns = [_return(return_row=3, amount="54550")]
+    p = ActionProposal(
+        action=ActionType.ISSUE_REFUND_NOTE,
+        order_id=1,
+        rationale="partial refund on return 3",
+        supporting_return_row=3,
+    )
+    result = validate_proposal(p, ORDERS, returns, matches=matches)
+    assert result.allowed is True
+
+
+def test_refund_equal_to_the_order_amount_is_allowed():
+    # a full refund sits exactly on the ceiling, so the check must not be >=
+    matches = [_match(return_row=3, order_id=1, confidence=MatchConfidence.HIGH)]
+    returns = [_return(return_row=3, amount="162500")]
+    p = ActionProposal(
+        action=ActionType.ISSUE_REFUND_NOTE,
+        order_id=1,
+        rationale="full refund on return 3",
+        supporting_return_row=3,
+    )
+    result = validate_proposal(p, ORDERS, returns, matches=matches)
+    assert result.allowed is True
+
+
+def test_refund_above_the_order_amount_is_rejected():
+    # the money ceiling: a refund cannot pay out more than the order was worth
+    matches = [_match(return_row=3, order_id=1, confidence=MatchConfidence.HIGH)]
+    returns = [_return(return_row=3, amount="5000000")]
+    p = ActionProposal(
+        action=ActionType.ISSUE_REFUND_NOTE,
+        order_id=1,
+        rationale="return 3 claims more than the order was worth",
+        supporting_return_row=3,
+    )
+    result = validate_proposal(p, ORDERS, returns, matches=matches)
+    assert result.allowed is False
+    assert "exceeds" in result.reason
 
 
 def test_missing_order_is_checked_before_action_specifics():
@@ -208,6 +263,6 @@ def test_missing_order_is_checked_before_action_specifics():
         rationale="order does not exist",
         supporting_return_row=3,
     )
-    result = validate_proposal(p, ORDERS, matches)
+    result = validate_proposal(p, ORDERS, matches=matches)
     assert result.allowed is False
     assert "does not exist" in result.reason
