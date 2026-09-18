@@ -89,8 +89,6 @@ The rarest signal in any portfolio. Measure whether the agent works, not just ru
 - [x] Golden dataset of ops questions plus expected answers/behaviours
 - [x] Scoring harness (exact plus judged where needed), reproducible via one command
 - [x] Results table generated into the README
-  nothing writes it into README.md: the 15/15 summary there is maintained by hand and will
-  not notice when a case is added)
 - [x] At least one documented failure the evals caught, and the fix
 - [x] DECISIONS.md entry for the eval methodology
 
