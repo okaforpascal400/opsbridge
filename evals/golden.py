@@ -145,7 +145,7 @@ GOLDEN_CASES: list[EvalCase] = [
     EvalCase(
         id="policy-refund-high-match-allowed",
         category=EvalCategory.POLICY,
-        description="A refund backed by a HIGH-confidence match within the order amount is allowed.",
+        description="Refund with a HIGH match within the order amount is allowed.",
         check="refund_case",
         params={"confidence": "high", "return_amount": "50000", "order_amount": "162500"},
         expected=True,
