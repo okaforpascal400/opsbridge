@@ -19,7 +19,8 @@ from typing import Any
 import pytest
 
 import agent.loop as loop_module
-from agent.loop import ask
+from agent.loop import ask, run_turn
+from observability.trace import Trace
 
 
 def _text_block(text: str) -> SimpleNamespace:
@@ -326,3 +327,146 @@ def test_a_type_error_inside_a_tool_is_not_swallowed(monkeypatch):
 
     with pytest.raises(TypeError, match="NoneType"):
         loop_module._dispatch_tool("get_operations_summary", {})
+
+
+def test_a_trace_records_every_model_and_tool_call(monkeypatch):
+    # one tool call then a final answer: model call, tool call, model call
+    monkeypatch.setattr(
+        loop_module, "_dispatch_tool", lambda _name, _input: {"flagged": 1}
+    )
+    trace = Trace(question="what needs review?")
+    client = _ScriptedClient(
+        [
+            _response("tool_use", [_tool_use_block("get_flagged_returns", "tu_1")]),
+            _response("end_turn", [_text_block("One return needs review.")]),
+        ]
+    )
+
+    answer = run_turn(
+        [{"role": "user", "content": "what needs review?"}], client=client, trace=trace
+    )
+
+    assert answer == "One return needs review."
+    assert [step.kind for step in trace.steps] == ["model_call", "tool_call", "model_call"]
+    tool_step = trace.steps[1]
+    assert tool_step.name == "get_flagged_returns"
+    assert tool_step.output == {"flagged": 1}
+    assert tool_step.error is None
+    assert all(step.latency_ms >= 0 for step in trace.steps)
+    assert trace.final_answer == "One return needs review."
+
+
+def test_tracing_does_not_change_the_answer(monkeypatch):
+    # the observe-only property: the same turn returns the same string either way
+    monkeypatch.setattr(
+        loop_module, "_dispatch_tool", lambda _name, _input: {"flagged": 1}
+    )
+
+    def _fresh_client() -> _ScriptedClient:
+        return _ScriptedClient(
+            [
+                _response("tool_use", [_tool_use_block("get_flagged_returns", "tu_1")]),
+                _response("end_turn", [_text_block("One return needs review.")]),
+            ]
+        )
+
+    untraced_messages = [{"role": "user", "content": "what needs review?"}]
+    traced_messages = [{"role": "user", "content": "what needs review?"}]
+    untraced = run_turn(untraced_messages, client=_fresh_client())
+    traced = run_turn(traced_messages, client=_fresh_client(), trace=Trace())
+
+    assert untraced == traced
+    # the message history the loop built is identical too, tracing appends nothing to it
+    assert len(untraced_messages) == len(traced_messages)
+
+
+def test_a_tool_error_is_recorded_on_its_step():
+    # an unknown tool name comes back as an error dict, and the step carries the error
+    trace = Trace()
+    client = _ScriptedClient(
+        [
+            _response("tool_use", [_tool_use_block("nonexistent_tool", "tu_1")]),
+            _response("end_turn", [_text_block("Sorry, I could not do that.")]),
+        ]
+    )
+
+    run_turn([{"role": "user", "content": "call a bad tool"}], client=client, trace=trace)
+
+    tool_step = next(step for step in trace.steps if step.kind == "tool_call")
+    assert tool_step.name == "nonexistent_tool"
+    assert tool_step.error == "unknown tool: nonexistent_tool"
+
+
+def test_no_trace_means_no_tracing(monkeypatch):
+    # the default path is untouched: nothing to pass, nothing recorded, same answer
+    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name, _input: {"ok": True})
+    client = _ScriptedClient(
+        [
+            _response("tool_use", [_tool_use_block("get_operations_summary", "tu_1")]),
+            _response("end_turn", [_text_block("All good.")]),
+        ]
+    )
+    assert run_turn([{"role": "user", "content": "status?"}], client=client) == "All good."
+
+
+def test_a_maxed_out_trace_records_the_iteration_limit_notice(monkeypatch):
+    # a runaway turn is exactly the one worth inspecting, so its trace says what happened
+    # instead of leaving the answer blank
+    monkeypatch.setattr(loop_module, "_dispatch_tool", lambda _name, _input: {"ok": True})
+
+    class _NeverStops:
+        def __init__(self) -> None:
+            self.messages = self
+            self.calls = 0
+
+        def create(self, **_kwargs: Any) -> SimpleNamespace:
+            self.calls += 1
+            block = _tool_use_block("get_operations_summary", f"tu_{self.calls}")
+            return _response("tool_use", [block])
+
+    trace = Trace(question="loop forever")
+    answer = run_turn(
+        [{"role": "user", "content": "loop forever"}], client=_NeverStops(), trace=trace
+    )
+
+    assert answer == loop_module.ITERATION_LIMIT_MESSAGE
+    assert trace.final_answer == loop_module.ITERATION_LIMIT_MESSAGE
+    assert len(trace.steps) == loop_module._MAX_ITERATIONS * 2
+
+
+def test_a_raising_tool_is_recorded_and_still_raises(monkeypatch):
+    # record then re-raise: the step explains the failure, the exception still ends the turn
+    def _database_down(_name: str, _input: dict) -> Any:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(loop_module, "_dispatch_tool", _database_down)
+    trace = Trace(question="how many orders?")
+    client = _ScriptedClient(
+        [_response("tool_use", [_tool_use_block("get_operations_summary", "tu_1")])]
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        run_turn(
+            [{"role": "user", "content": "how many orders?"}], client=client, trace=trace
+        )
+
+    tool_step = trace.steps[-1]
+    assert tool_step.kind == "tool_call"
+    assert tool_step.name == "get_operations_summary"
+    assert tool_step.output is None
+    assert tool_step.error == "database unavailable"
+    assert trace.final_answer == ""
+
+
+def test_a_raising_tool_without_a_trace_still_propagates(monkeypatch):
+    # the untraced path is unchanged: no recording, same exception
+    def _database_down(_name: str, _input: dict) -> Any:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(loop_module, "_dispatch_tool", _database_down)
+    client = _ScriptedClient(
+        [_response("tool_use", [_tool_use_block("get_operations_summary", "tu_1")])]
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        run_turn([{"role": "user", "content": "how many orders?"}], client=client)

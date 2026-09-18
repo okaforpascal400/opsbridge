@@ -73,10 +73,15 @@ Make "trusted to act" real. The agent proposes; the human confirms.
 ## Phase 5: Observability. Hats: 3 (observability)
 See why the agent did what it did. The debugging story Ed calls "so important".
 
-- [ ] trace_id per request threaded through every step
-- [ ] Structured logs: each decision, tool call, input/output, latency, failures
-- [ ] /trace/{id} returning the full timeline
-- [ ] A minimal trace view for the demo video
+- [~] trace_id per request threaded through every step (one trace id per agent turn, on
+  every step of that turn, and an audit row can carry it; HTTP requests are not traced, and
+  nothing outside a client that posts trace_id to /confirm supplies one yet)
+- [~] Structured logs: each decision, tool call, input/output, latency, failures (all of
+  it recorded to the trace store; no logger is wired, so nothing reaches stdout or a log
+  aggregator, and swallowed failures are still silent)
+- [x] /trace/{id} returning the full timeline
+- [~] A minimal trace view for the demo video (the timeline is served as JSON by
+  /trace/{id}; a visual view is deferred)
 
 ## Phase 6: Evals. Hats: 3 (evals). DO NOT SKIP
 The rarest signal in any portfolio. Measure whether the agent works, not just runs.
