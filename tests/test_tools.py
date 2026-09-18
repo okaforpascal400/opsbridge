@@ -14,14 +14,23 @@ import os
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, text
 
 from agent.tools import (
     get_flagged_returns,
     get_operations_summary,
     get_quarantined_rows,
     get_unmatched_returns,
+    propose_action,
+)
+from guardrails.actions import (
+    ACTIONS_SCHEMA,
+    ACTIONS_TABLE,
+    count_actions,
+    ensure_actions_table,
 )
 from legacy.seed_db import seed
+from schema_adapter.models import OrderStatus
 from schema_adapter.pipeline import run_pipeline
 
 TEST_DATABASE_URL_ENV = "OPSBRIDGE_TEST_DATABASE_URL"
@@ -116,3 +125,90 @@ def test_tier_tools_partition_the_matches(seeded: tuple[str, Path]) -> None:
     flagged = get_flagged_returns(database_url, returns_csv)
     assert len(unmatched) == summary["matches"]["none_no_match"]
     assert len(flagged) == summary["matches"]["low_needs_review"]
+
+
+# --- propose_action: validates, never commits ---------------------------------------
+
+
+def _pending_order_id(database_url: str, returns_csv: Path) -> int:
+    _summary, result, _matches = run_pipeline(database_url, returns_csv)
+    return next(o.order_id for o in result.orders if o.status == OrderStatus.PENDING)
+
+
+def _clean_actions_table(database_url: str):
+    """Give the count assertions a known starting point in the throwaway database."""
+    engine = create_engine(database_url)
+    ensure_actions_table(engine)
+    with engine.begin() as conn:
+        conn.execute(text(f"TRUNCATE TABLE {ACTIONS_SCHEMA}.{ACTIONS_TABLE} RESTART IDENTITY"))
+    return engine
+
+
+def test_propose_confirm_on_a_pending_order_is_allowed(seeded: tuple[str, Path]) -> None:
+    database_url, returns_csv = seeded
+    order_id = _pending_order_id(database_url, returns_csv)
+    result = propose_action(
+        action="confirm_order",
+        order_id=order_id,
+        rationale="order is still pending",
+        database_url=database_url,
+        returns_csv=returns_csv,
+    )
+    assert set(result) == {"allowed", "reason"}
+    assert result["allowed"] is True
+    assert result["reason"]
+    assert json.dumps(result)  # the verdict is JSON-safe for the tool loop
+
+
+def test_propose_confirm_on_a_missing_order_is_rejected(seeded: tuple[str, Path]) -> None:
+    database_url, returns_csv = seeded
+    result = propose_action(
+        action="confirm_order",
+        order_id=999_999,
+        rationale="no such order",
+        database_url=database_url,
+        returns_csv=returns_csv,
+    )
+    assert result["allowed"] is False
+    assert "does not exist" in result["reason"]
+
+
+def test_propose_with_an_unknown_action_is_rejected(seeded: tuple[str, Path]) -> None:
+    database_url, returns_csv = seeded
+    result = propose_action(
+        action="delete_everything",
+        order_id=1,
+        rationale="not a real action",
+        database_url=database_url,
+        returns_csv=returns_csv,
+    )
+    assert result["allowed"] is False
+    assert "Unknown action" in result["reason"]
+
+
+def test_propose_action_writes_nothing(seeded: tuple[str, Path]) -> None:
+    # the safety property: proposing is inert, whatever the verdict. Only the confirm
+    # step writes, and this tool has no path to it.
+    database_url, returns_csv = seeded
+    engine = _clean_actions_table(database_url)
+    assert count_actions(engine) == 0
+
+    order_id = _pending_order_id(database_url, returns_csv)
+    allowed = propose_action(
+        action="confirm_order",
+        order_id=order_id,
+        rationale="order is still pending",
+        database_url=database_url,
+        returns_csv=returns_csv,
+    )
+    rejected = propose_action(
+        action="hold_account",
+        order_id=999_999,
+        rationale="no such order",
+        database_url=database_url,
+        returns_csv=returns_csv,
+    )
+
+    assert allowed["allowed"] is True
+    assert rejected["allowed"] is False
+    assert count_actions(engine) == 0
