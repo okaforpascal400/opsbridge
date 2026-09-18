@@ -499,3 +499,27 @@ DECISION 032) because any persistence failure must be prevented from breaking a 
 it is silent until Phase 5 structured logging gives it somewhere to report. Locked by
 test_conversation.py, including test_a_raising_turn_still_persists_its_trace and
 test_a_save_failure_does_not_break_the_turn.
+
+### 034: Audit rows carry an optional trace_id, correlated but not enforced (2026-09-18)
+Decision: The opsbridge.actions table gains a nullable trace_id column so a confirmation can
+be traced back to the agent turn that proposed it. It is nullable, not required, because a
+human can confirm directly through the HTTP endpoint with no agent turn behind it. It is a
+plain TEXT string, not a foreign key to opsbridge.traces, so an audit write never fails on a
+trace reference that was never saved, which matters because DECISION 033 lets a trace save
+fail silently: the action must still be recorded even if its trace was lost. The column is
+added by an idempotent ALTER TABLE ADD COLUMN IF NOT EXISTS in ensure_actions_table, so a
+database created before this change repairs itself on the next call rather than 500-ing,
+since CREATE TABLE IF NOT EXISTS never alters an existing table. The endpoint caps trace_id
+at 64 characters, matching the rationale cap.
+Alternatives: A required trace_id (breaks direct human confirms); a foreign key to the
+traces table (an audit write would fail when a trace was not persisted); a manual migration
+step (a database that predates the change 500s until someone remembers to run the SQL).
+Why: The correlation is what lets an auditor answer "which turn produced this row", closing
+a real gap DECISION 031 had deferred. Nullable and unenforced is the honest model given a
+turn may not exist and a trace may not have saved; the audit record's own integrity comes
+first. The self-healing DDL is the lightweight migration this project's scale warrants, and
+it is idempotent, verified by test_an_older_table_repairs_itself. Two limits are deliberately
+left open: attribution is caller-asserted (any client can stamp any id) and nothing outside
+tests supplies a trace_id yet, both bounded by the same missing authentication layer as the
+deferred confirmed_by field. Locked by test_actions.py including
+test_an_older_table_repairs_itself.
