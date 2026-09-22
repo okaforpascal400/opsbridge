@@ -551,3 +551,24 @@ entry and rubric. The gate is demonstrated, not assumed: flipping the refund amo
 comparison from > to < took the suite to 13/15 and exited non-zero, naming both sides of the
 break (policy-refund-over-amount-refused went from refuse to allow, and
 policy-refund-high-match-allowed from allow to refuse); reverting restored 15/15.
+
+### 036: Demo routes: /summary is a plain read, /ask is a stateless agent turn (2026-09-19)
+Decision: api/main.py adds two routes for the demo UI. GET /summary runs the pipeline and
+returns its nine counts: no model call, no write. POST /ask runs one question through a
+fresh Conversation per request and returns the answer with the turn's trace id. The route
+builds the engine the trace is saved through from get_database_url and disposes it after
+the turn.
+Alternatives: A server-side session keyed by an id, or history sent back by the client, so
+/ask could carry follow-ups; letting Conversation build its own engine; putting auth or a
+rate limit on /ask now.
+Why: The demo UI asks one-off questions, and a server-side session needs an owner, an id and
+an expiry, which waits on the same missing auth layer as DECISION 031. Left to itself, a
+per-request Conversation builds an engine nobody disposes, and each request leaked a pooled
+Postgres connection until the garbage collector ran (500 requests left 74 open against a
+limit of 100); owning the engine in the route, as /trace does, closes that.
+Scope, deliberately left open. /ask has no authentication and no rate limit, so anyone who
+can reach the port spends model tokens. One request is bounded (a 1000-character question,
+the 8-iteration guard, max_tokens 1024 per call), but nothing bounds how many arrive, which
+is the thing to close before a public deploy. A turn that raises is an unlogged 500 that
+does not return its trace id, the same gap DECISION 031 records for /confirm. Locked by
+test_ask_endpoint.py and test_summary_endpoint.py.

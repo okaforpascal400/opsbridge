@@ -1,6 +1,7 @@
 """OpsBridge HTTP API.
 
-Exposes a health check, the human confirmation endpoint, and a trace reader. The trace
+Exposes a health check, the human confirmation endpoint, a trace reader, and two routes
+for the demo UI: a reconciliation summary and a question box for the agent. The trace
 reader answers the debugging question: what did the agent do on a given turn, in order,
 with what inputs, outputs, latencies and errors. The confirmation endpoint is
 the HTTP surface of the guardrail write path: a client POSTs a proposed action, the server
@@ -21,6 +22,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
+from agent.conversation import Conversation
 from config import get_settings
 from guardrails.actions import confirm
 from guardrails.models import ActionProposal, ActionType
@@ -85,6 +87,40 @@ class TraceResponse(BaseModel):
     steps: list[TraceStepResponse]
 
 
+class SummaryResponse(BaseModel):
+    """The aggregate reconciliation picture, as the demo UI shows it."""
+
+    orders_in: int
+    orders_canonicalized: int
+    orders_quarantined: int
+    returns_in: int
+    returns_canonicalized: int
+    returns_quarantined: int
+    matched_high: int
+    matched_low: int
+    matched_none: int
+
+
+class AskRequest(BaseModel):
+    """One operations question for the agent, posted as JSON.
+
+    The question is capped because every character is sent to the model and stored in the
+    trace. Extra fields are refused, as on /confirm, so a client never gets a 200 for
+    something the server ignored.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=1000)
+
+
+class AskResponse(BaseModel):
+    """The agent's answer and the id of the trace that records how it got there."""
+
+    answer: str
+    trace_id: str
+
+
 app: FastAPI = FastAPI(title="OpsBridge API")
 
 
@@ -95,9 +131,9 @@ def health() -> HealthResponse:
 
 
 def get_database_url() -> str:
-    """The database the confirm path reads and writes.
+    """The database the routes read and write.
 
-    A FastAPI dependency so a test can override it and drive the route against a throwaway
+    A FastAPI dependency so a test can override it and drive a route against a throwaway
     database instead of the configured one.
     """
     return get_settings().database_url
@@ -176,3 +212,40 @@ def read_trace(
     if trace is None:
         raise HTTPException(status_code=404, detail=f"No trace with id {trace_id}.")
     return TraceResponse(**trace)
+
+
+@app.get("/summary", response_model=SummaryResponse)
+def read_summary(
+    database_url: Annotated[str, Depends(get_database_url)],
+) -> SummaryResponse:
+    """Return the reconciliation summary: rows in, canonicalized, quarantined, matched.
+
+    A plain read. It runs the deterministic pipeline and nothing else: no model call and
+    no write, so it is safe to call on every page load.
+    """
+    summary, _result, _matches = run_pipeline(database_url)
+    return SummaryResponse(**summary.model_dump())
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask_question(
+    request: AskRequest,
+    database_url: Annotated[str, Depends(get_database_url)],
+) -> AskResponse:
+    """Put one question to the agent and return its answer with the turn's trace id.
+
+    This calls the real model, so CI never exercises it; the tests stub Conversation. Each
+    request starts a fresh Conversation, so there is no follow-up context across requests.
+    The trace is saved by Conversation itself, and the returned id reads back through
+    GET /trace/{trace_id}. It is an empty string only if no trace id was assigned.
+    """
+    # the route owns the engine the trace is saved through: left to Conversation, each
+    # request would build one that is never disposed, and its pooled connection would
+    # stay open until the garbage collector happened to run
+    engine = create_engine(database_url)
+    try:
+        convo = Conversation(engine=engine)
+        answer = convo.ask(request.question)
+    finally:
+        engine.dispose()
+    return AskResponse(answer=answer, trace_id=convo.last_trace_id or "")
