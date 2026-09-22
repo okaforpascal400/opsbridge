@@ -1,9 +1,10 @@
 """OpsBridge HTTP API.
 
-Exposes a health check, the human confirmation endpoint, a trace reader, and two routes
-for the demo UI: a reconciliation summary and a question box for the agent. The trace
-reader answers the debugging question: what did the agent do on a given turn, in order,
-with what inputs, outputs, latencies and errors. The confirmation endpoint is
+Exposes a health check, the human confirmation endpoint, a trace reader, two routes for
+the demo UI (a reconciliation summary and a question box for the agent), and the console
+page itself at the root path, the only route here that serves HTML rather than JSON.
+The trace reader answers the debugging question: what did the agent do on a given turn,
+in order, with what inputs, outputs, latencies and errors. The confirmation endpoint is
 the HTTP surface of the guardrail write path: a client POSTs a proposed action, the server
 re-validates it against current reconciliation state and, only if the policy allows, writes
 one audit row through confirm(). The endpoint adds no new write path; it reuses the single
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
@@ -28,6 +30,11 @@ from guardrails.actions import confirm
 from guardrails.models import ActionProposal, ActionType
 from observability.trace import load_trace
 from schema_adapter.pipeline import run_pipeline
+
+# Resolved from this module's location, not the working directory, so the console is
+# served whether the app was started from the repo root, from a container, or by a
+# process manager with a working directory of its own.
+INDEX_HTML = Path(__file__).parent / "static" / "index.html"
 
 
 class HealthResponse(BaseModel):
@@ -249,3 +256,15 @@ def ask_question(
     finally:
         engine.dispose()
     return AskResponse(answer=answer, trace_id=convo.last_trace_id or "")
+
+
+@app.get("/", response_class=FileResponse, include_in_schema=False)
+def console() -> FileResponse:
+    """Serve the demo console, a single self-contained page that calls the routes above.
+
+    The page holds no logic of its own: it reads /summary, posts questions to /ask, posts
+    proposals to /confirm and reads /trace/{id}, so what it shows is what the API returns.
+    It is left out of the OpenAPI schema because it is a page, not an API operation, and
+    the generated docs should list the JSON surface only.
+    """
+    return FileResponse(INDEX_HTML)

@@ -572,3 +572,23 @@ the 8-iteration guard, max_tokens 1024 per call), but nothing bounds how many ar
 is the thing to close before a public deploy. A turn that raises is an unlogged 500 that
 does not return its trace id, the same gap DECISION 031 records for /confirm. Locked by
 test_ask_endpoint.py and test_summary_endpoint.py.
+
+### 037: The API process serves the demo console at the root path (2026-09-22)
+Decision: GET / returns api/static/index.html with FileResponse, from a path resolved off
+this module's location rather than the working directory. The page is one self-contained
+file that calls /summary, /ask, /confirm and /trace/{id}, so it holds no logic of its own.
+It is excluded from the OpenAPI schema (include_in_schema=False).
+Alternatives: A StaticFiles mount plus a redirect from /; a separate static host or CDN; a
+built frontend with its own toolchain and deploy.
+Why: One process, one deploy and no build step is the whole reason this is a single file:
+the demo has to start with one command and keep working after a Railway redeploy. Serving
+it from the module's own directory means the working directory of whoever starts the
+process cannot break it. Keeping it out of the schema keeps the published contract in /docs
+a JSON one, since a page is not an API operation.
+Scope, deliberately left open. api/static/ is now part of the deployed API artifact, so a
+deploy that drops it turns GET / into a request-time failure rather than a 404. HEAD / is a
+405 like every other route here, so an uptime check belongs on /health. The console sends
+supporting_return_row only when that field is filled in, so a refund note can be proposed
+with the return that backs it and refused on the real ground when it cannot (DECISION 028),
+rather than always refused for a missing return. Locked by test_ui.py, which also fails if
+the page stops calling a route the app serves.

@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OpsBridge Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#141821; --panel:#1C212C; --panel-2:#20262F; --line:#2A303C;
+    --ink:#E6E9EF; --muted:#8A93A6; --faint:#5A6272;
+    --ok:#3FB6A8; --ok-bg:#14312e; --no:#E0654B; --no-bg:#37201b;
+    --sig:#5B8DEF; --sig-bg:#18233f;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:'Inter',system-ui,-apple-system,sans-serif;
+    font-size:15px; line-height:1.5; letter-spacing:-0.005em;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:var(--mono); font-variant-numeric:tabular-nums}
+  a{color:var(--sig); text-decoration:none}
+
+  header{
+    padding:22px 32px; border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; gap:16px; flex-wrap:wrap;
+  }
+  header h1{font-size:18px; font-weight:700; margin:0; letter-spacing:-0.02em}
+  header .tag{color:var(--muted); font-size:13px}
+  header .spacer{flex:1}
+  header .env{
+    font-family:var(--mono); font-size:12px; color:var(--muted);
+    border:1px solid var(--line); border-radius:6px; padding:4px 10px;
+  }
+
+  main{
+    max-width:1180px; margin:0 auto; padding:28px 32px 64px;
+    display:grid; grid-template-columns:1.05fr 1fr; gap:28px;
+  }
+  @media(max-width:900px){ main{grid-template-columns:1fr; padding:20px} }
+
+  .col{display:flex; flex-direction:column; gap:24px; min-width:0}
+  section.block{
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:20px 22px;
+  }
+  .block h2{
+    font-size:12px; font-weight:600; text-transform:none;
+    color:var(--muted); margin:0 0 4px; letter-spacing:0;
+  }
+  .block .sub{color:var(--faint); font-size:12.5px; margin:0 0 16px}
+
+  /* stat tiles */
+  .stats{display:grid; grid-template-columns:repeat(3,1fr); gap:12px}
+  .stat{
+    background:var(--bg); border:1px solid var(--line); border-radius:9px;
+    padding:14px 14px 12px;
+  }
+  .stat .n{font-family:var(--mono); font-size:26px; font-weight:500; line-height:1}
+  .stat .l{color:var(--muted); font-size:11.5px; margin-top:7px}
+  .stat.ok .n{color:var(--ok)} .stat.sig .n{color:var(--sig)}
+  .tierline{
+    margin-top:14px; padding-top:14px; border-top:1px solid var(--line);
+    display:flex; gap:20px; font-size:13px; color:var(--muted);
+  }
+  .tierline b{font-family:var(--mono); color:var(--ink); font-weight:500}
+  .tierline .hi b{color:var(--ok)} .tierline .lo b{color:var(--no)}
+
+  /* agent */
+  .askrow{display:flex; gap:10px}
+  input[type=text], input[type=number], select{
+    background:var(--bg); border:1px solid var(--line); border-radius:8px;
+    color:var(--ink); font:inherit; padding:10px 12px; width:100%;
+  }
+  input:focus,select:focus{outline:2px solid var(--sig); outline-offset:0}
+  button{
+    background:var(--sig); color:#fff; border:0; border-radius:8px;
+    font:inherit; font-weight:600; padding:10px 16px; cursor:pointer; white-space:nowrap;
+  }
+  button.ghost{background:transparent; color:var(--sig); border:1px solid var(--line)}
+  button:disabled{opacity:.5; cursor:default}
+  .answer{
+    margin-top:14px; background:var(--bg); border:1px solid var(--line);
+    border-radius:8px; padding:14px 16px; font-size:14px; white-space:pre-wrap;
+    min-height:20px; color:var(--ink);
+  }
+  .answer .placeholder{color:var(--faint)}
+  .tracelink{margin-top:10px; font-size:12.5px; color:var(--muted)}
+
+  /* verdict, the hero */
+  .verdict{
+    border-radius:11px; padding:20px 22px; border:1px solid var(--line);
+    background:var(--bg); min-height:96px;
+  }
+  .verdict.idle .big{color:var(--faint)}
+  .verdict .big{font-size:22px; font-weight:700; letter-spacing:-0.01em; display:flex; align-items:center; gap:11px}
+  .verdict .dot{width:11px; height:11px; border-radius:50%; background:var(--faint)}
+  .verdict.ok{background:var(--ok-bg); border-color:#22514b}
+  .verdict.ok .big{color:var(--ok)} .verdict.ok .dot{background:var(--ok)}
+  .verdict.no{background:var(--no-bg); border-color:#5a3025}
+  .verdict.no .big{color:var(--no)} .verdict.no .dot{background:var(--no)}
+  .verdict .reason{margin-top:11px; font-size:13.5px; color:var(--ink); line-height:1.45}
+
+  .field{margin-bottom:12px}
+  .field label{display:block; font-size:12px; color:var(--muted); margin-bottom:6px}
+  .actionrow{display:grid; grid-template-columns:1fr 96px; gap:10px}
+
+  /* trace */
+  .steps{display:flex; flex-direction:column; gap:8px; margin-top:4px}
+  .step{
+    display:grid; grid-template-columns:14px 1fr auto; gap:11px; align-items:start;
+    background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+  }
+  .step .rail{margin-top:4px; width:9px; height:9px; border-radius:50%; background:var(--sig)}
+  .step.tool .rail{background:var(--ok)}
+  .step .k{font-size:11px; color:var(--muted)}
+  .step .name{font-family:var(--mono); font-size:13px; margin-top:1px}
+  .step .ms{font-family:var(--mono); font-size:12px; color:var(--muted); white-space:nowrap}
+  .step .err{color:var(--no); font-size:12px; margin-top:3px}
+  .trace-empty{color:var(--faint); font-size:13px}
+  .foot{color:var(--faint); font-size:12px; margin-top:18px; text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>OpsBridge</h1>
+  <span class="tag">reconciliation &amp; guarded actions console</span>
+  <span class="spacer"></span>
+  <span class="env mono" id="env">connecting…</span>
+</header>
+
+<main>
+  <div class="col">
+    <section class="block">
+      <h2>Reconciliation</h2>
+      <p class="sub">Every figure is counted by the pipeline from the source data, not by this page.</p>
+      <div class="stats" id="stats">
+        <div class="stat"><div class="n mono">..</div><div class="l">loading</div></div>
+      </div>
+      <div class="tierline" id="tiers"></div>
+    </section>
+
+    <section class="block">
+      <h2>Ask the agent</h2>
+      <p class="sub">The agent answers by calling tested tools. It states only what they return.</p>
+      <div class="askrow">
+        <input type="text" id="q" placeholder="How many returns need review?" autocomplete="off">
+        <button id="askBtn">Ask</button>
+      </div>
+      <div class="answer" id="answer"><span class="placeholder">The answer will appear here.</span></div>
+      <div class="tracelink" id="tracelink"></div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="block">
+      <h2>Propose an action</h2>
+      <p class="sub">The agent proposes; the policy decides; a confirmed action is the only thing that writes.</p>
+      <div class="field">
+        <label for="action">Action</label>
+        <select id="action">
+          <option value="confirm_order">Confirm order</option>
+          <option value="hold_account">Hold account</option>
+          <option value="issue_refund_note">Issue refund note</option>
+        </select>
+      </div>
+      <div class="field actionrow">
+        <div>
+          <label for="orderId">Order id</label>
+          <input type="text" id="orderId" class="mono" placeholder="11" inputmode="numeric">
+        </div>
+        <div style="display:flex; align-items:flex-end">
+          <button id="confirmBtn" style="width:100%">Submit</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="supportingReturnRow">Supporting return row (a refund note needs one)</label>
+        <input type="number" id="supportingReturnRow" class="mono" placeholder="3" min="0" step="1" inputmode="numeric">
+      </div>
+      <div class="field">
+        <label for="rationale">Rationale (a human reads this)</label>
+        <input type="text" id="rationale" placeholder="routine confirmation">
+      </div>
+      <div class="verdict idle" id="verdict">
+        <div class="big"><span class="dot"></span><span id="verdictText">No decision yet</span></div>
+        <div class="reason" id="verdictReason">Submit a proposal to see the policy decide.</div>
+      </div>
+    </section>
+
+    <section class="block">
+      <h2>Trace</h2>
+      <p class="sub">How the last answer was reached: every model call and tool call, with timing.</p>
+      <div class="steps" id="steps"><div class="trace-empty">Ask the agent, then open its trace.</div></div>
+    </section>
+  </div>
+</main>
+
+<div class="foot">Synthetic data. Nothing on this screen is computed in the browser beyond formatting.</div>
+
+<script>
+const $ = s => document.querySelector(s);
+async function jget(u){ const r = await fetch(u); if(!r.ok) throw new Error(r.status); return r.json(); }
+async function jpost(u,b){ const r = await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}); return {ok:r.ok, status:r.status, data: await r.json().catch(()=>({}))}; }
+
+let lastTraceId = null;
+
+async function loadSummary(){
+  try{
+    const s = await jget('/summary');
+    $('#env').textContent = 'live';
+    $('#stats').innerHTML = `
+      <div class="stat sig"><div class="n mono">${s.orders_in}</div><div class="l">orders in</div></div>
+      <div class="stat"><div class="n mono">${s.returns_in}</div><div class="l">returns in</div></div>
+      <div class="stat ok"><div class="n mono">${s.orders_quarantined + s.returns_quarantined}</div><div class="l">quarantined</div></div>
+    `;
+    $('#tiers').innerHTML = `
+      <span class="hi">matched <b>${s.matched_high}</b> high</span>
+      <span class="lo">flagged <b>${s.matched_low}</b> for review</span>
+      <span>unmatched <b>${s.matched_none}</b></span>
+    `;
+  }catch(e){ $('#env').textContent = 'offline'; }
+}
+
+async function ask(){
+  const q = $('#q').value.trim(); if(!q) return;
+  $('#askBtn').disabled = true; $('#answer').textContent = 'Thinking…'; $('#tracelink').textContent='';
+  try{
+    const {ok,data} = await jpost('/ask',{question:q});
+    if(!ok){ $('#answer').textContent = 'The agent could not answer that request.'; return; }
+    $('#answer').textContent = data.answer;
+    lastTraceId = data.trace_id || null;
+    if(lastTraceId){ $('#tracelink').innerHTML = `Answer recorded as trace <span class="mono">${lastTraceId.slice(0,12)}</span>. <a href="#" id="openTrace">Open trace</a>`;
+      $('#openTrace').onclick = ev => { ev.preventDefault(); loadTrace(lastTraceId); }; }
+  }catch(e){ $('#answer').textContent = 'The agent is unavailable. Check the API key and database.'; }
+  finally{ $('#askBtn').disabled = false; }
+}
+
+async function loadTrace(id){
+  $('#steps').innerHTML = '<div class="trace-empty">Loading…</div>';
+  try{
+    const t = await jget('/trace/'+id);
+    if(!t.steps || !t.steps.length){ $('#steps').innerHTML = '<div class="trace-empty">No steps recorded.</div>'; return; }
+    $('#steps').innerHTML = t.steps.map(s => `
+      <div class="step ${s.kind==='tool_call'?'tool':''}">
+        <div class="rail"></div>
+        <div>
+          <div class="k">${s.kind==='tool_call'?'tool call':'model call'}</div>
+          <div class="name">${s.name}</div>
+          ${s.error?`<div class="err">error: ${s.error}</div>`:''}
+        </div>
+        <div class="ms">${s.latency_ms} ms</div>
+      </div>
+    `).join('');
+  }catch(e){ $('#steps').innerHTML = '<div class="trace-empty">Could not load that trace.</div>'; }
+}
+
+async function submitAction(){
+  const action = $('#action').value;
+  const orderId = parseInt($('#orderId').value, 10);
+  const rationale = $('#rationale').value.trim() || 'submitted from the console';
+  const supporting = $('#supportingReturnRow').value.trim();
+  const v = $('#verdict'), vt = $('#verdictText'), vr = $('#verdictReason');
+  if(!orderId){ v.className='verdict no'; vt.textContent='Refused'; vr.textContent='Enter an order id.'; return; }
+  $('#confirmBtn').disabled = true; v.className='verdict idle'; vt.textContent='Deciding…'; vr.textContent='';
+  const body = {action, order_id:orderId, rationale};
+  // sent only when given, and '' is the only empty value: row 0 is a real return row
+  if(supporting !== ''){ body.supporting_return_row = parseInt(supporting, 10); }
+  try{
+    const {data} = await jpost('/confirm', body);
+    if(data && data.allowed === true){ v.className='verdict ok'; vt.textContent='Allowed and recorded'; vr.textContent = data.reason; }
+    else if(data && data.allowed === false){ v.className='verdict no'; vt.textContent='Refused'; vr.textContent = data.reason; }
+    else { v.className='verdict no'; vt.textContent='Rejected'; vr.textContent = (data.detail && data.detail[0] && data.detail[0].msg) || 'The request was not valid.'; }
+  }catch(e){
+    v.className='verdict no'; vt.textContent='Not submitted';
+    vr.textContent = 'The API did not respond, so nothing was proposed. Check that the server is running.';
+  }finally{
+    $('#confirmBtn').disabled = false;
+  }
+}
+
+$('#askBtn').onclick = ask;
+$('#q').addEventListener('keydown', e => { if(e.key==='Enter') ask(); });
+$('#confirmBtn').onclick = submitAction;
+loadSummary();
+</script>
+</body>
+</html>
