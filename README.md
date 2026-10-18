@@ -1,17 +1,35 @@
 # OpsBridge
 
-Demo video: coming soon.
-<!-- demo video link goes here once it is recorded (Phase 7) -->
+An AI agent that reconciles a messy, multi-source operations stack and takes
+guarded, human-approved actions on it, with every decision traced and measured.
 
-OpsBridge is an AI agent for a fragmented B2B operations stack: a legacy Postgres
-table, a spreadsheet export, PDFs and an undocumented partner API. It answers
-natural-language operations questions across all of them and proposes write-actions
-that a human confirms before anything commits.
+It answers natural-language questions about fragmented order and return data,
+proposes write-actions like confirming an order or issuing a refund, and
+**cannot execute any of them on its own**: a human confirms, the policy
+re-validates, and money actions fail closed. Every agent turn is recorded to a
+durable trace, and a deterministic eval suite gates every change in CI.
 
-Phases 1 to 5 are built: the messy legacy world, the schema adapter that reconciles it, a
-read-only tool-calling agent with an MCP server, the guardrail write path behind a human
-confirmation, and tracing with an eval suite over all of it. Guardrail hardening continues
-and the packaging work is Phase 7. See ROADMAP.md for the phase status.
+- **What it is and why:** [SOLUTION.md](SOLUTION.md) (the problem, the approach, the trade-offs)
+- **How it works, in plain English:** [LESSONS.md](LESSONS.md)
+- **The build, phase by phase:** [ROADMAP.md](ROADMAP.md) (what is done and what is still open)
+- **Every design decision and its reasoning:** [DECISIONS.md](DECISIONS.md)
+
+## Run it
+
+Requires Python 3.14 and Docker. The short version, in bash:
+
+```
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # set ANTHROPIC_API_KEY to run the agent
+docker compose up -d            # Postgres, wait for Up (healthy)
+python -m legacy.seed_db        # seeds the legacy schema, writes data/returns.csv
+uvicorn api.main:app --reload --port 8000
+```
+
+Then open http://localhost:8000/ for the demo console, or check
+http://localhost:8000/health for `{"status":"ok"}`. PowerShell commands, the test
+database and the partner API are covered in [Running it locally](#running-it-locally).
 
 ## Evals
 
